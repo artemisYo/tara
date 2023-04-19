@@ -46,6 +46,22 @@ const struct PunctTokenPair punctuation[PUNCTCOUNT] = {
     {')', ClPar},   {'{', OpBrace}, {'}', ClBrace}, {'[', OpBrack},
     {']', ClBrack}, {'<', OpKet},   {'>', ClKet}};
 
+#define IGNORECOUNT 3
+const TokenType ignore[IGNORECOUNT] = {
+    Space,
+    Tab,
+    LF,
+};
+
+int ignore_find(TokenType in) {
+  for (int i = 0; i < IGNORECOUNT; i++) {
+    if (in == ignore[i]) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 int punct_find(char in) {
   for (int i = 0; i < PUNCTCOUNT; i++) {
     if (in == punctuation[i].punct) {
@@ -55,19 +71,29 @@ int punct_find(char in) {
   return -1;
 }
 
+#define POCOUNT 3
+char* predefined_ops[POCOUNT] =
+  {"->", ":", "."};
+
 Str *ops = NULL;
 int ops_cap, ops_count;
 
 void ops_init() {
   if (ops == NULL) {
-    ops = calloc(sizeof(Str), 1);
-    ops_cap = 1;
-    ops_count = 0;
+    ops = calloc(sizeof(Str), POCOUNT + 1);
+    for (int i = 0; i < POCOUNT; i++) {
+      ops[i] = String.make(predefined_ops[i]);
+    }
+    ops_cap = POCOUNT + 1;
+    ops_count = POCOUNT;
   }
 }
 
 void ops_deinit() {
   if (ops != NULL) {
+    for (int i = POCOUNT; i < ops_count; i++) {
+      String.drop(ops[i]);
+    }
     free(ops);
     ops_cap = 0;
     ops_count = 0;
@@ -88,7 +114,7 @@ Token tokenize_punct(StrReader *input) {
   if (i > -1) {
     Token out = {
         punctuation[i].tok,
-        Reader.position(input),
+	Reader.deref(input),
         1,
     };
     return out;
@@ -98,9 +124,9 @@ Token tokenize_punct(StrReader *input) {
 }
 
 int tokenize_opreg(StrReader *input) {
-  if (strncmp(Reader.deref(input), "operator", sizeof("operator")-1) == 0) {
-    long int l = strcspn(Reader.deref(input)+8, ".");
-    Str op = String.make(strdupnw(Reader.deref(input)+8, l));
+  if (strncmp(Reader.deref(input), "operator", sizeof("operator") - 1) == 0) {
+    long int l = strcspn(Reader.deref(input) + 8, ".");
+    Str op = String.make(strdupnw(Reader.deref(input) + 8, l));
 
     if (ops_count >= ops_cap) {
       ops_cap *= 1.2;
@@ -108,7 +134,7 @@ int tokenize_opreg(StrReader *input) {
     }
     ops[ops_count] = op;
     ops_count++;
-    return l+9;
+    return l + 9;
   }
   return 0;
 }
@@ -118,7 +144,7 @@ Token tokenize_op(StrReader *input) {
   if (i > -1) {
     Token out = {
         Operator,
-        Reader.position(input),
+        Reader.deref(input),
         ops[i].len,
     };
     return out;
@@ -135,7 +161,7 @@ Token tokenize_keyword(StrReader *input) {
     if (punct_find(*post) > -1 || ops_find(post) > -1) {
       Token out = {
           keywords[i].tok,
-          Reader.position(input),
+          Reader.deref(input),
           l,
       };
       return out;
@@ -148,16 +174,17 @@ Token tokenize_keyword(StrReader *input) {
 Token tokenize_ident(StrReader *input) {
   StrReader temp = *input;
   unsigned long int i = 0;
-  for (; i < Reader.length(input); i++) {
+  for (; i < Reader.length(&temp); i++) {
     if (punct_find(Reader.get_char(&temp)) > -1 ||
-        ops_find(Reader.deref(input)) > -1) {
+        ops_find(Reader.deref(&temp)) > -1) {
+      printf("Identifier with length [%lu]\n", i);
       break;
     }
     Reader.increment(&temp);
   }
   Token out = {
       Ident,
-      Reader.position(input),
+      Reader.deref(input),
       i,
   };
   return out;
@@ -184,13 +211,15 @@ TokenStream tokenize_run(char *input) {
     for (int i = 0; i < 4; i++) {
       Token res = funcs[i](&reader);
       if (res.len > 0) {
-	Reader.shift(&reader, res.len);
-        if (out.len >= out.cap) {
-          out.cap *= 1.2;
-          out.stream = realloc(out.stream, sizeof(Token) * out.cap);
+        Reader.shift(&reader, res.len);
+	if (ignore_find(res.type) == -1) {
+          if (out.len >= out.cap) {
+            out.cap *= 1.2;
+            out.stream = realloc(out.stream, sizeof(Token) * out.cap);
+          }
+          out.stream[out.len] = res;
+          out.len++;
         }
-        out.stream[out.len] = res;
-        out.len++;
         break;
       }
     }
@@ -202,11 +231,13 @@ TokenStream tokenize_run(char *input) {
 TokenStream tokenize(char *input) { return tokenize_run(input); }
 
 /* int main() { */
-/*   TokenStream res = tokenize_run("operator -.\nfn main<>() {\n\tdamn - fuck\n}"); */
+/*   TokenStream res = tokenize_run("operator -.\nfn main<>() {\n\tdamn -
+ * fuck\n}"); */
 /*   printf("%s\n----\n", "operator -.\nfn main<>() {\n\tdamn - fuck\n}"); */
 /*   for (int i = 0; i < res.len; i++) { */
 /*     Token *cur = &res.stream[i]; */
-/*     printf("[%s]: %i, %i\n", type_to_name(cur->type), cur->location, cur->len); */
+/*     printf("[%s]: %i, %i\n", type_to_name(cur->type), cur->location,
+ * cur->len); */
 /*   } */
 /*   free(res.stream); */
 /*   return 0; */

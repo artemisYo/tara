@@ -1,6 +1,7 @@
 #ifndef STRC
 #define STRC
 #include <string.h>
+#include <stdlib.h>
 typedef struct {
   char* str;
   unsigned long int len;
@@ -14,9 +15,15 @@ static Str str_make(char* str) {
   return out;
 }
 
+static void str_drop(Str str) {
+  free(str.str);
+}
+
 const struct {
   Str (*make)(char*);
+  void (*drop)(Str);
 } String = {
     str_make,
+    str_drop,
 };
 #endif

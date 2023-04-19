@@ -1,92 +1,101 @@
-#include <stdlib.h>
 #include "tokenizer.c"
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
-// TODO:
-//   1. Actually write all of the boilerplate needed to effectively write this
-//   parser, as generics or ADTs don't exist here
-
-typedef struct Derivations Deriv;
-typedef struct Results Res;
-
-typedef struct LazyInitFromToken {
-  int descriminant;
-  union {
-    Deriv* (*f)(TokenReader);
-    Deriv* (*g)(Deriv*);
-  };
-  union {
-    TokenReader tr_input;
-    Deriv* de_input;
-  };
-  Deriv* final;
-} LazyF;
-Deriv *get(LazyF *field) {
-  if (field->final == NULL) {
-    switch (field->descriminant) {
-    case 0: field->final = field->f(field->tr_input);
-      break;
-    case 1: field->final = field->g(field->de_input);
-      break;
-    default: return NULL;
-    }
+#define assert_token(a, b)                                                     \
+  if (a.type != b) {                                                           \
+    printf("[%s : %i] assert_token failed: expected [%s] found [%s]\n",        \
+           __FILE__, __LINE__, type_to_name(b), type_to_name(a.type));         \
+    exit(1);                                                                   \
   }
-  return field->final;
-}
+#define assert_op(t, s)                                                        \
+  if (strncmp(t.location, s, strlen(s)) == 0) {                                \
+    printf("[%s : %i] assert_op failed: expected [%s] found [%.*s]\n",         \
+           __FILE__, __LINE__, s, (int)strlen(s), t.location);                 \
+    exit(1);                                                                   \
+  }
 
-struct Results {
-  LazyF next;
-  Token parsed;
-};
+typedef struct ASLeaf {
+  const char* location;
+  int len;
+} ASLeaf;
 
-struct Derivations{
-  Res token;
-};
 
-Deriv* parse(TokenReader input);
+typedef struct ASTree {
+  enum {
+    Root, Function
+  } type;
+  union {
+    struct ASTree *node;
+    struct ASLeaf leaf;
+  } *next;
+} ASTree;
 
-Res parse_token(TokenReader input) {
-  Res out = {
-    .next = {
-      .f = parse,
-      .tr_input = TReader.push(input),
-      .final = NULL,
-    },
-    .parsed = TReader.get_token(&input),
-  };
+ASTree parse_params(TokenReader *input) {}
+ASTree parse_return_type(TokenReader *input) {}
+ASTree parse_block(TokenReader *input) {}
+
+ASTree parse_fn(TokenReader *input) {
+  ASTree out = {Function, calloc(sizeof(long), 4)};
+  Token name = TReader.get_token(input);
+  assert_token(name, Ident);
+  out.next[0].leaf = (ASLeaf) {name.location, name.len};
+  TReader.step(input);
+  ASTree params = parse_params(input);
+  out.next[1].node = malloc(sizeof(ASTree));
+  *out.next[1].node = params;
+  ASTree return_type = parse_return_type(input);
+  out.next[2].node = malloc(sizeof(ASTree));
+  *out.next[2].node = return_type;
+  assert_op(TReader.get_token(input), "->");
+  ASTree block = parse_block(input);
+  out.next[3].node = malloc(sizeof(ASTree));
+  *out.next[3].node = block;
   return out;
 }
 
-Res parse_fn(Deriv *d) {
-  if (d->token.parsed.type == Fn) {
-    Res out = {
-      .next = {.final = get(&d->token.next)},
-      .parsed = d->token.parsed,
-    };
-    return out;
+ASTree parse_stream(TokenStream input) {
+  TokenReader stream = TReader.make(&input);
+  ASTree *nodes = calloc(sizeof(ASTree), 10);
+  int nodes_count = 0, nodes_cap = 0;
+  switch (TReader.get_token(&stream).type) {
+  case Fn:
+    TReader.step(&stream);
+    if (nodes_count >= nodes_cap) {
+      nodes_cap *= 1.2;
+      nodes_cap++;
+      nodes = realloc(nodes, sizeof(ASTree)*nodes_cap);
+    }
+    nodes[nodes_count] = parse_fn(&stream);
+    nodes_count++;
+    break;
+  default:
+    break;
   }
-}
-
-Deriv* parse(TokenReader input) {
-  Deriv* out = malloc(sizeof(Deriv));
-  out->token = parse_token(input);
+  ASTree out = {Root, calloc(sizeof(long), nodes_count)};
+  for (int i = 0; i < nodes_count; i++) {
+    out.next[i].node = malloc(sizeof(ASTree));
+    *out.next[i].node = nodes[i];
+  }
   return out;
 }
 
 int main() {
-  TokenStream res = tokenize_run("operator -.\nfn main<>() {\n\tdamn - fuck\n}");
-  printf("%s\n----\n", "operator -.\nfn main<>() {\n\tdamn - fuck\n}");
-  for (int i = 0; i < res.len; i++) {
-    Token *cur = &res.stream[i];
-    printf("[%s]: %i, %i\n", type_to_name(cur->type), cur->location, cur->len);
+  char input[] =
+      "operator +.\nfn main(args: Vec[String]): Int "
+      "->\n\tString.parse_num(args[0])\n\t+ String.parse_num(args[1]).";
+  TokenStream res = tokenize_run(input);
+  TokenReader reader = TReader.make(&res);
+  reader.head--;
+  printf("%s", input);
+  while (TReader.step(&reader)) {
+    Token cur = TReader.get_token(&reader);
+    printf("[%s]: %.*s, %i\n", type_to_name(cur.type), cur.len, cur.location,
+           cur.len);
   }
   printf("----\n");
-  Deriv* d = parse(TReader.make(&res));
-  Deriv* iter = d;
-  while (iter->token.next.tr_input.head <= iter->token.next.tr_input.backing->len) {
-    Token *cur = &iter->token.parsed;
-    printf("[%s]: %i, %i\n", type_to_name(cur->type), cur->location, cur->len);
-    iter = get(&iter->token.next);
-  }
+  parse_stream(res);
   free(res.stream);
   return 0;
 }

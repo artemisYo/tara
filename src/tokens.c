@@ -2,9 +2,12 @@
 #define TOKENSC
 typedef enum {
   Ident = 0,
+  //--Whitespace start
   Space = 1,
   Tab,
   LF,
+  //--Whitespace end
+  //--Delimiters start
   OpPar,
   ClPar,
   OpBrace,
@@ -13,8 +16,11 @@ typedef enum {
   ClBrack,
   OpKet,
   ClKet,
+  //--Delimiters end
   Operator,
+  //--Keywords start
   Fn,
+  //--Keywords end
 } TokenType;
 #define PUNCTCOUNT (ClKet)
 #define KEYWCOUNT (Fn - Operator)
@@ -34,7 +40,7 @@ char *type_to_name(TokenType type) {
 // token produced is an error
 typedef struct {
   TokenType type;
-  int location;
+  const char* location;
   int len;
 } Token;
 
@@ -45,7 +51,7 @@ typedef struct {
 } TokenStream;
 
 typedef struct {
-  TokenStream* backing;
+  const TokenStream* backing;
   int head;
 } TokenReader;
 
@@ -62,17 +68,20 @@ static Token tokenreader_token(TokenReader* in) {
   }
   return *(in->backing->stream + in->backing->len - 1);
 }
-static TokenReader tokenreader_push(TokenReader in) {
-  in.head++;
-  return in;
+static int tokenreader_step(TokenReader* in) {
+  if (in->head < in->backing->len - 1) {
+    in->head++;
+    return 1;
+  }
+  return 0;
 }
 static struct {
   TokenReader (*make)(TokenStream*);
   Token (*get_token)(TokenReader*);
-  TokenReader (*push)(TokenReader);
+  int (*step)(TokenReader*);
 } TReader = {
   tokenreader_make,
   tokenreader_token,
-  tokenreader_push,
+  tokenreader_step,
 };
 #endif

@@ -28,10 +28,7 @@ static StrReader reader_make(Str* owned) {
   return out;
 }
 static const char *reader_deref(StrReader *in) {
-  if (in->head < in->backing->len) {
-    return in->backing->str + in->head;
-  }
-  return in->backing->str + in->head-1;
+  return in->backing->str + in->head;
 }
 static char reader_char(StrReader *in) {
   if (in->head < in->backing->len) {
