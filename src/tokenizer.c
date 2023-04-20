@@ -71,9 +71,8 @@ int punct_find(char in) {
   return -1;
 }
 
-#define POCOUNT 3
-char* predefined_ops[POCOUNT] =
-  {"->", ":", "."};
+#define POCOUNT 4
+char *predefined_ops[POCOUNT] = {"->", ":", ".", ","};
 
 Str *ops = NULL;
 int ops_cap, ops_count;
@@ -114,7 +113,7 @@ Token tokenize_punct(StrReader *input) {
   if (i > -1) {
     Token out = {
         punctuation[i].tok,
-	Reader.deref(input),
+        Reader.deref(input),
         1,
     };
     return out;
@@ -212,7 +211,7 @@ TokenStream tokenize_run(char *input) {
       Token res = funcs[i](&reader);
       if (res.len > 0) {
         Reader.shift(&reader, res.len);
-	if (ignore_find(res.type) == -1) {
+        if (ignore_find(res.type) == -1) {
           if (out.len >= out.cap) {
             out.cap *= 1.2;
             out.stream = realloc(out.stream, sizeof(Token) * out.cap);
