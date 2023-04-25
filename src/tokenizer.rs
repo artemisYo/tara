@@ -33,48 +33,6 @@ pub struct ErrorToken<'a> {
     func_location: &'static str,
 }
 
-static mut OPS: Vec<String> = Vec::new();
-
-fn ops_init() {
-    const PREDEF_OPS: &[&'static str] = &["->", ":", ".", ","];
-    // TODO: thread-safe ops
-    // this is fine without any checks for now
-    // as the we do not run anything concurrently
-    // it is to be reconsidered if multiple file
-    // inputs are processed in parallel
-    // since sharing defined ops will require
-    // change to this
-    unsafe {
-        if OPS.len() == 0 {
-            for o in PREDEF_OPS.iter() {
-                OPS.push(o.to_string());
-            }
-        }
-    }
-}
-fn ops_register(op: &str) {
-    // TODO: thread-safe ops
-    unsafe {
-        OPS.push(op.to_string());
-    }
-}
-// TODO: change this to recognize operators in function definitions
-// something like
-// fn -'(num: int): int -> negate(num).
-// fn main() -> assert(negate(5) == -5).
-// it would then simply look for function definitions
-// with apostrophes (marking param placement)
-fn tokenize_opreg(input: &str) -> Option<usize> {
-    if input.starts_with("operator") {
-        // TODO: find a better way to handle this
-        let x = input.find(['.', '\n']).unwrap();
-        let op = input.get(8..x)?.trim();
-        ops_register(op);
-        return Some(x + 1);
-    }
-    return None;
-}
-
 fn tokenize_punct<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> {
     const PUNCTUATION: &[(char, TokenType)] = &[
         (' ', TokenType::Space),
@@ -128,24 +86,36 @@ fn tokenize_keyword<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken
 }
 
 fn tokenize_op<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> {
-    // TODO: thread-safe ops
-    let (_, s) = unsafe {
-        OPS.iter()
-            .map(|s| (input.starts_with(s), s.len()))
-            .find(|(s, _)| *s)
+    const OPS: &[char] = &[
+        '=', '+', '-', '&', '|', '*', '^', '!', '/', ',', '.', ':', '@', '#', '$', '%', '~', '`',
+    ];
+    let (i, _) =
+        input
+            .chars()
+            .take_while(|c| OPS.contains(&c))
+            .fold((0, 'a'), |(mut i, mut l), c| {
+                if i == 0 {
+                    l = c;
+                    i += 1;
+                    (i, l)
+                } else if l == c {
+                    i += 1;
+                    (i, l)
+                } else {
+                    (i, l)
+                }
+            });
+    if i == 0 {
+        return Err(ErrorToken {
+            str_location: input,
+            func_location: "tokenize_op: L111",
+        });
     }
-    .ok_or(ErrorToken {
-        str_location: input,
-        func_location: "tokenize_op: L136",
-    })?;
     let t = Token {
         kind: TokenType::Operator,
-        location: input.get(0..s).ok_or(ErrorToken {
-            str_location: input,
-            func_location: "tokenize_op: L142",
-        })?,
+        location: &input[..i],
     };
-    return Ok((t, s));
+    return Ok((t, i));
 }
 
 fn tokenize_ident<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> {
@@ -179,7 +149,6 @@ fn tokenize_ident<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> 
 pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
     const IGNORE: &[TokenType] = &[TokenType::Space, TokenType::Tab, TokenType::LF];
     let mut out = Vec::new();
-    ops_init();
     let tokenizers: [fn(&str) -> Result<(Token, usize), ErrorToken>; 4] = [
         tokenize_keyword,
         tokenize_punct,
@@ -187,12 +156,6 @@ pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
         tokenize_ident,
     ];
     while input.len() > 0 {
-        if let Some(i) = tokenize_opreg(input) {
-            input = input.get(i..).ok_or(ErrorToken {
-                str_location: input,
-                func_location: "tokenize_run: L187",
-            })?;
-        }
         let (t, l) = tokenizers
             .iter()
             .find_map(|f| f(input).map_or(None, |r| Some(r)))
