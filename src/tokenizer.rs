@@ -1,5 +1,5 @@
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum TokenType {
+pub enum TokenType {
     Ident = 0,
     //--Whitespace start
     Space = 1,
@@ -23,12 +23,12 @@ enum TokenType {
 }
 
 #[derive(Debug)]
-struct Token<'a> {
+pub struct Token<'a> {
     kind: TokenType,
     location: &'a str,
 }
 #[derive(Debug)]
-struct ErrorToken<'a> {
+pub struct ErrorToken<'a> {
     str_location: &'a str,
     func_location: &'static str,
 }
@@ -58,6 +58,12 @@ fn ops_register(op: &str) {
         OPS.push(op.to_string());
     }
 }
+// TODO: change this to recognize operators in function definitions
+// something like
+// fn -'(num: int): int -> negate(num).
+// fn main() -> assert(negate(5) == -5).
+// it would then simply look for function definitions
+// with apostrophes (marking param placement)
 fn tokenize_opreg(input: &str) -> Option<usize> {
     if input.starts_with("operator") {
         // TODO: find a better way to handle this
@@ -170,7 +176,7 @@ fn tokenize_ident<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> 
     return Ok((t, i));
 }
 
-fn tokenize_run<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
+pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
     const IGNORE: &[TokenType] = &[TokenType::Space, TokenType::Tab, TokenType::LF];
     let mut out = Vec::new();
     ops_init();
@@ -189,8 +195,7 @@ fn tokenize_run<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
         }
         let (t, l) = tokenizers
             .iter()
-            .filter_map(|f| f(input).map_or(None, |r| Some(r)))
-            .next()
+            .find_map(|f| f(input).map_or(None, |r| Some(r)))
             .ok_or(ErrorToken {
                 str_location: input,
                 func_location: "tokenize_run: L199",
@@ -206,14 +211,74 @@ fn tokenize_run<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
     return Ok(out);
 }
 
-enum TokenTree<'a> {}
-fn preparse<'a>(input: Vec<Token<'a>>) -> TokenTree<'a> {
-    todo!("A stub");
+#[derive(Debug)]
+pub enum TokenTree<'a> {
+    Bare(Token<'a>),
+    Group {
+        delimiters: (Token<'a>, Token<'a>),
+        children: Box<[Self]>,
+    },
+}
+impl<'a> TokenTree<'a> {
+    fn unwrap_bare(self) -> Token<'a> {
+        match self {
+            Self::Bare(t) => t,
+            e => panic!("tried to unwrap TokenTree::Bare(Token), but found {:?}", e),
+        }
+    }
 }
 
-fn main() {
-    let s = "operator +.\nfn main() -> int {\n\tthis + fuck\n}";
-    println!("{s}");
-    println!("----");
-    println!("{:?}", tokenize_run(s));
+// TODO:
+// figure out how to differentiate on operators and delimiters:
+// 'fn main() -> 1 + 1.' vs 'some_struct.field'
+pub fn preparse<'a>(input: Vec<Token<'a>>) -> Vec<TokenTree<'a>> {
+    const DELIMITERS: &[(&'static str, &'static str)] =
+        &[("{", "}"), ("(", ")"), ("[", "]"), ("->", ".")];
+    fn delim_check_open(input: &Token) -> bool {
+        DELIMITERS
+            .iter()
+            .find_map(|(d, _)| {
+                if d == &input.location {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false)
+    }
+    fn delim_check_closed(input: &Token) -> Option<&'static str> {
+        DELIMITERS
+            .iter()
+            .find_map(|(p, d)| if d == &input.location { Some(*p) } else { None })
+    }
+    let mut unclosed = Vec::new();
+    let mut stack = Vec::new();
+    for t in input {
+        if delim_check_open(&t) {
+            unclosed.push(stack.len());
+            stack.push(TokenTree::Bare(t));
+        } else if let Some(p) = delim_check_closed(&t) {
+            if let Some(i) = unclosed.pop() {
+                // TODO: handle failure on this side
+                // as you could have something like
+                // " some code ( value, tuple }"
+                let children = stack.drain(i + 1..).collect::<Vec<_>>().into_boxed_slice();
+                let opening_del = stack.pop().unwrap().unwrap_bare();
+                if opening_del.location == p {
+                    let delimiters = (opening_del, t);
+                    stack.push(TokenTree::Group {
+                        delimiters,
+                        children,
+                    });
+                } else {
+                    todo!("Mismatched delimiters found!");
+                }
+            } else {
+                todo!("Seemingly unclosed delimiter found!");
+            }
+        } else {
+            stack.push(TokenTree::Bare(t));
+        }
+    }
+    return stack;
 }
