@@ -1,5 +1,3 @@
-//type Set<V> = std::collections::BTreeSet<V>;
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum TokenType {
     Ident = 0,
@@ -35,25 +33,10 @@ struct ErrorToken<'a> {
     func_location: &'static str,
 }
 
-const KEYWORDS: &[(&'static str, TokenType)] = &[("fn", TokenType::Fn)];
-const PUNCTUATION: &[(char, TokenType)] = &[
-    (' ', TokenType::Space),
-    ('\t', TokenType::Tab),
-    ('\n', TokenType::LF),
-    ('(', TokenType::OpPar),
-    (')', TokenType::ClPar),
-    ('{', TokenType::OpBrace),
-    ('}', TokenType::ClBrace),
-    ('[', TokenType::OpBrack),
-    (']', TokenType::ClBrack),
-    ('<', TokenType::OpKet),
-    ('>', TokenType::ClKet),
-];
-const IGNORE: &[TokenType] = &[TokenType::Space, TokenType::Tab, TokenType::LF];
-const PREDEF_OPS: &[&'static str] = &["->", ":", ".", ","];
 static mut OPS: Vec<String> = Vec::new();
 
 fn ops_init() {
+    const PREDEF_OPS: &[&'static str] = &["->", ":", ".", ","];
     // TODO: thread-safe ops
     // this is fine without any checks for now
     // as the we do not run anything concurrently
@@ -87,6 +70,19 @@ fn tokenize_opreg(input: &str) -> Option<usize> {
 }
 
 fn tokenize_punct<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> {
+    const PUNCTUATION: &[(char, TokenType)] = &[
+        (' ', TokenType::Space),
+        ('\t', TokenType::Tab),
+        ('\n', TokenType::LF),
+        ('(', TokenType::OpPar),
+        (')', TokenType::ClPar),
+        ('{', TokenType::OpBrace),
+        ('}', TokenType::ClBrace),
+        ('[', TokenType::OpBrack),
+        (']', TokenType::ClBrack),
+        ('<', TokenType::OpKet),
+        ('>', TokenType::ClKet),
+    ];
     let (_, k) = PUNCTUATION
         .iter()
         .map(|(c, k)| (input.starts_with(*c), k))
@@ -106,6 +102,7 @@ fn tokenize_punct<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> 
 }
 
 fn tokenize_keyword<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> {
+    const KEYWORDS: &[(&'static str, TokenType)] = &[("fn", TokenType::Fn)];
     let (_, l, k) = KEYWORDS
         .iter()
         .map(|(s, k)| (input.starts_with(s), s.len(), k))
@@ -174,6 +171,7 @@ fn tokenize_ident<'a>(input: &'a str) -> Result<(Token<'a>, usize), ErrorToken> 
 }
 
 fn tokenize_run<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
+    const IGNORE: &[TokenType] = &[TokenType::Space, TokenType::Tab, TokenType::LF];
     let mut out = Vec::new();
     ops_init();
     let tokenizers: [fn(&str) -> Result<(Token, usize), ErrorToken>; 4] = [
@@ -206,6 +204,11 @@ fn tokenize_run<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, ErrorToken> {
         }
     }
     return Ok(out);
+}
+
+enum TokenTree<'a> {}
+fn preparse<'a>(input: Vec<Token<'a>>) -> TokenTree<'a> {
+    todo!("A stub");
 }
 
 fn main() {
