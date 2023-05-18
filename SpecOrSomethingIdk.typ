@@ -27,8 +27,8 @@ forStmt    <- "for" name "in" normExpr "->" exprList? ("." | ";")
 normExpr   <- arithmetic | dataDecl | literal | name
 literal    <- numLit | strLit | charLit | boolLit
 numLit     <- ('0'..'9')+
-strLit     <- "\"" any* "\""
-charLit    <- "'" any "'"
+strLit     <- "\"" (!"\"" ("\\\"" | any))* "\""
+charLit    <- "'" (!"'" ("\\'" | any)) "'"
 boolLit    <- "true" | "false"
 arithmetic <-
 dataDecl   <-
