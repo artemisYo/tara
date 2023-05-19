@@ -5,6 +5,7 @@ type Result<'a> = std::result::Result<(AST<'a>, Str<'a>), ParseError>;
 #[derive(Debug)]
 enum ParseError {
     EndOfString,
+    TodoError,
     Expected(&'static str),
     Multiple(Vec<Self>),
     FuncNameError(Box<Self>),
@@ -15,6 +16,8 @@ enum ParseError {
     NormExprError([Box<Self>; 4]),
     LiteralError([Box<Self>; 4]),
     BlockExprError([Box<Self>; 3]),
+    ForStmtIdentError(Box<Self>),
+    ForStmtSourceError(Box<Self>),
     NameNotAlpha,
     NumNotDigit,
     CharNotAccepted,
@@ -28,6 +31,12 @@ enum AST<'a> {
         name: Box<Self>,
         parameters: Option<Box<Self>>,
         ret_type: Option<Box<Self>>,
+        body: Option<Box<Self>>,
+        returns: bool,
+    },
+    ForStmt {
+        ident: Box<Self>,
+        source: Box<Self>,
         body: Option<Box<Self>>,
         returns: bool,
     },
@@ -108,9 +117,17 @@ impl<'a> Deref for Str<'a> {
 fn parse_programm(input: Str) -> Result {
     let mut acc = vec![];
     let mut head = input;
-    while let Ok((a, s)) = parse_function(head) {
-        head = s;
-        acc.push(a);
+    loop {
+        match parse_function(head) {
+            Ok((a, s)) => {
+                head = s;
+                acc.push(a);
+            }
+            Err(e) => {
+                println!("{:?}", e);
+                break;
+            }
+        }
     }
     return Ok((AST::Prog(acc), head));
 }
@@ -380,9 +397,11 @@ fn parse_block_expr(input: Str) -> Result {
     }))
 }
 fn parse_if_stmt(input: Str) -> Result {
+    return Err(ParseError::TodoError);
     todo!()
 }
 fn parse_match_stmt(input: Str) -> Result {
+    return Err(ParseError::TodoError);
     todo!()
 }
 
@@ -391,8 +410,9 @@ fn parse_for_stmt(mut input: Str) -> Result {
     let ident;
     let source;
     let mut body = None;
+    let mut returns = false;
     if !input.check("for") {
-        todo!() //return
+        return Err(ParseError::Expected("for"));
     }
     match parse_name(input) {
         Ok((a, s)) => {
@@ -400,11 +420,11 @@ fn parse_for_stmt(mut input: Str) -> Result {
             ident = Box::new(a);
         }
         Err(e) => {
-            todo!() //return
+            return Err(ParseError::ForStmtIdentError(Box::new(e)));
         }
     }
     if !input.check("in") {
-        todo!() //return
+        return Err(ParseError::Expected("in"));
     }
     match parse_norm_expr(input) {
         Ok((a, s)) => {
@@ -412,18 +432,45 @@ fn parse_for_stmt(mut input: Str) -> Result {
             source = Box::new(a);
         }
         Err(e) => {
-            todo!() //return
+            return Err(ParseError::ForStmtSourceError(Box::new(e)));
         }
     }
     if !input.check("->") {
-        todo!() //return
+        return Err(ParseError::Expected("->"));
     }
-    todo!()
+    if let Ok((a, s)) = parse_expr_list(input) {
+        input = s;
+        body = Some(Box::new(a));
+    }
+    match input.check(".") {
+        true => {
+            returns = true;
+        }
+        false => {
+            if !input.check(";") {
+                return Err(ParseError::Multiple(vec![
+                    ParseError::Expected("."),
+                    ParseError::Expected(";"),
+                ]));
+            }
+        }
+    }
+    Ok((
+        AST::ForStmt {
+            ident,
+            source,
+            body,
+            returns,
+        },
+        input,
+    ))
 }
 fn parse_arithmetic(input: Str) -> Result {
+    return Err(ParseError::TodoError);
     todo!()
 }
 fn parse_data_decl(input: Str) -> Result {
+    return Err(ParseError::TodoError);
     todo!()
 }
 
@@ -546,6 +593,7 @@ fn parse_bool_lit(mut input: Str) -> Result {
 }
 
 fn main() {
-    let r = parse_programm(Str::new("fn main(arg: str): int -> 0."));
+    let input = Str::new("fn main(args: str): int ->\n\tfor a in args ->\n\t\ta;\n\t0.");
+    let r = parse_programm(input);
     println!("{:#?}", r);
 }
