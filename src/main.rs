@@ -14,6 +14,7 @@ enum ParseError {
     ExprListEmpty(Box<Self>),
     NormExprError([Box<Self>; 4]),
     LiteralError([Box<Self>; 4]),
+    BlockExprError([Box<Self>; 3]),
     NameNotAlpha,
     NumNotDigit,
     CharNotAccepted,
@@ -309,7 +310,7 @@ fn parse_expr_list(mut input: Str) -> Result {
 fn parse_norm_expr(input: Str) -> Result {
     let mut err_stack: [std::mem::MaybeUninit<Box<ParseError>>; 4] =
         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-    match parse_literal(input) {
+    match parse_arithmetic(input) {
         Err(e) => {
             err_stack[0].write(Box::new(e));
         }
@@ -325,9 +326,7 @@ fn parse_norm_expr(input: Str) -> Result {
             return o;
         }
     }
-    // TODO: this should be the first match but then I cant see
-    // whether thn line in main works or not
-    match parse_arithmetic(input) {
+    match parse_literal(input) {
         Err(e) => {
             err_stack[2].write(Box::new(e));
         }
@@ -347,7 +346,78 @@ fn parse_norm_expr(input: Str) -> Result {
         std::mem::transmute(err_stack)
     }))
 }
+
+// blockExpr  <- ifStmt | matchStmt | forStmt
 fn parse_block_expr(input: Str) -> Result {
+    let mut err_stack: [std::mem::MaybeUninit<Box<ParseError>>; 3] =
+        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    match parse_if_stmt(input) {
+        Err(e) => {
+            err_stack[0].write(Box::new(e));
+        }
+        o => {
+            return o;
+        }
+    }
+    match parse_match_stmt(input) {
+        Err(e) => {
+            err_stack[1].write(Box::new(e));
+        }
+        o => {
+            return o;
+        }
+    }
+    match parse_for_stmt(input) {
+        Err(e) => {
+            err_stack[2].write(Box::new(e));
+        }
+        o => {
+            return o;
+        }
+    }
+    Err(ParseError::BlockExprError(unsafe {
+        std::mem::transmute(err_stack)
+    }))
+}
+fn parse_if_stmt(input: Str) -> Result {
+    todo!()
+}
+fn parse_match_stmt(input: Str) -> Result {
+    todo!()
+}
+
+// forStmt    <- "for" name "in" normExpr "->" exprList? ("." | ";")
+fn parse_for_stmt(mut input: Str) -> Result {
+    let ident;
+    let source;
+    let mut body = None;
+    if !input.check("for") {
+        todo!() //return
+    }
+    match parse_name(input) {
+        Ok((a, s)) => {
+            input = s;
+            ident = Box::new(a);
+        }
+        Err(e) => {
+            todo!() //return
+        }
+    }
+    if !input.check("in") {
+        todo!() //return
+    }
+    match parse_norm_expr(input) {
+        Ok((a, s)) => {
+            input = s;
+            source = Box::new(a);
+        }
+        Err(e) => {
+            todo!() //return
+        }
+    }
+    if !input.check("->") {
+        todo!() //return
+    }
     todo!()
 }
 fn parse_arithmetic(input: Str) -> Result {
