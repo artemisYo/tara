@@ -22,6 +22,25 @@ macro_rules! orig {
         const origin: &dyn Origin = &$name;
     };
 }
+macro_rules! charset {
+    ($name:ident) => {
+        #[derive(Debug)]
+        struct $name;
+        #[allow(non_upper_case_globals)]
+        const set: &dyn Set<char> = &$name;
+    };
+    ($name:ident, $pred:expr) => {
+        #[derive(Debug)]
+        struct $name;
+        impl Set<char> for $name {
+            fn contains(&self, o: &char) -> bool {
+                $pred(o)
+            }
+        }
+        #[allow(non_upper_case_globals)]
+        const set: &dyn Set<char> = &$name;
+    };
+}
 
 #[derive(Debug)]
 enum ParseError<'a> {
@@ -252,19 +271,13 @@ fn parse_function(mut input: Str) -> Result {
 // name       <- alpha+
 fn parse_name(mut input: Str) -> Result {
     orig!(Name);
-    #[derive(Debug)]
-    struct Alpha;
-    impl Set<char> for Alpha {
-        fn contains(&self, c: &char) -> bool {
-            c.is_ascii_alphabetic()
-        }
-    }
-    let i = input.chars().take_while(|c| Alpha.contains(c)).count();
+    charset!(Alpha, |c: &char| c.is_ascii_alphabetic());
+    let i = input.chars().take_while(|c| set.contains(c)).count();
     if i == 0 {
         return Err(ParseError::Meta {
             origin,
             loc: input,
-            err: Box::new(ParseError::NotInSet(&Alpha)),
+            err: Box::new(ParseError::NotInSet(set)),
         });
     }
     // for some god forsaken reason I cannot borrow the underlying
@@ -658,19 +671,13 @@ fn parse_literal(input: Str) -> Result {
 // numLit     <- ('0'..'9')+
 fn parse_num_lit(mut input: Str) -> Result {
     orig!(NumLit);
-    #[derive(Debug)]
-    struct Digit;
-    impl Set<char> for Digit {
-        fn contains(&self, c: &char) -> bool {
-            c.is_ascii_digit()
-        }
-    }
-    let i = input.chars().take_while(|c| Digit.contains(c)).count();
+    charset!(Digit, |x: &char| x.is_ascii_digit());
+    let i = input.chars().take_while(|c| set.contains(c)).count();
     if i == 0 {
         return Err(ParseError::Meta {
             origin,
             loc: input,
-            err: Box::new(ParseError::NotInSet(&Digit)),
+            err: Box::new(ParseError::NotInSet(set)),
         });
     }
     // for some god forsaken reason I cannot borrow the underlying
