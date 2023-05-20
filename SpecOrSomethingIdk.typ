@@ -16,7 +16,10 @@ function   <- "fn" name "(" paramList? ")" typeSig? "->" exprList? ("." | ";")
 // the last element of such a list for later semantic analysis
 paramList  <- (parameter ",")* parameter ","?
 parameter  <- name typeSig
-typeSig    <- ":" name
+typeSig    <- ":" type
+type       <- "*"* "["*n name ("[" tpList "]")? ((";" numLit)? "]")*n
+tpList     <- (typeParam ",")* typeParam ","?
+typeParam  <- type
 // here for example the last expr is returned from a function
 // unless a semicolon is used to end the block
 exprList   <- ((blockExpr ","?) | (normExpr ","))* (blockExpr | normExpr) ","?
@@ -24,12 +27,13 @@ blockExpr  <- ifStmt | matchStmt | forStmt
 ifStmt     <-
 matchStmt  <-
 forStmt    <- "for" name "in" normExpr "->" exprList? ("." | ";")
-normExpr   <- arithmetic | dataDecl | literal | name
+normExpr   <- funcCall | arithmetic | dataDecl | literal | name
 literal    <- numLit | strLit | charLit | boolLit
 numLit     <- ('0'..'9')+
 strLit     <- "\"" (!"\"" ("\\\"" | any))* "\""
 charLit    <- "'" (!"'" ("\\'" | any)) "'"
 boolLit    <- "true" | "false"
+funcCall   <- name "(" exprList? ")"
 arithmetic <-
 dataDecl   <-
 name       <- alpha+

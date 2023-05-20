@@ -94,6 +94,19 @@ enum AST<'a> {
         body: Option<Vec<Self>>,
         last: Box<Self>,
     },
+    Type {
+        name: Box<Self>,
+        params: Option<Box<Self>>,
+        array: Option<Vec<Option<Box<Self>>>>,
+        refd: u8,
+    },
+    TypeParams {
+        body: Vec<Self>,
+    },
+    FuncCall {
+        name: Box<Self>,
+        args: Option<Box<Self>>,
+    },
     Name(&'a str),
     Number(&'a str),
     String(&'a str),
@@ -359,9 +372,7 @@ fn parse_parameter(mut input: Str) -> Result {
     Ok((AST::Parameter { name, type_sig }, input))
 }
 
-// typeSig    <- ":" name
-// TODO: this thang doesn't parse more complex types such as
-// *str or [int] or whatever
+// typeSig    <- ":" type
 fn parse_type_sig(mut input: Str) -> Result {
     orig!(TypeSig);
     if !input.check(":") {
@@ -371,7 +382,135 @@ fn parse_type_sig(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected(":")),
         });
     }
-    parse_name(input)
+    parse_type(input)
+}
+
+// type       <- "*"* "["*n name ("[" tpList "]")? ((";" numLit)? "]")*n
+fn parse_type(mut input: Str) -> Result {
+    orig!(Type);
+    let mut ref_depth = 0;
+    let mut array_depth = 0;
+    let mut params = None;
+    let mut array = vec![];
+    let name;
+    while input.check("*") {
+        ref_depth += 1;
+    }
+    while input.check("[") {
+        array_depth += 1;
+    }
+    match parse_name(input) {
+        Ok((a, s)) => {
+            input = s;
+            name = Box::new(a);
+        }
+        Err(e) => {
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
+        }
+    }
+    if input.check("[") {
+        match parse_tp_list(input) {
+            Ok((a, s)) => {
+                input = s;
+                params = Some(Box::new(a));
+            }
+            Err(e) => {
+                return Err(ParseError::Trace {
+                    origin,
+                    err: Box::new(e),
+                })
+            }
+        }
+        if !input.check("]") {
+            return Err(ParseError::Meta {
+                origin,
+                loc: input,
+                err: Box::new(ParseError::Expected("]")),
+            });
+        }
+    }
+    for _ in 0..array_depth {
+        array.push(None);
+        if input.check(";") {
+            match parse_num_lit(input) {
+                Ok((a, s)) => {
+                    input = s;
+                    *array.last_mut().unwrap() = Some(Box::new(a));
+                }
+                Err(e) => {
+                    return Err(ParseError::Trace {
+                        origin,
+                        err: Box::new(e),
+                    })
+                }
+            }
+        }
+        if !input.check("]") {
+            return Err(ParseError::Meta {
+                origin,
+                loc: input,
+                err: Box::new(ParseError::Expected("]")),
+            });
+        }
+    }
+    let array = if array.is_empty() { None } else { Some(array) };
+    Ok((
+        AST::Type {
+            name,
+            params,
+            array,
+            refd: ref_depth,
+        },
+        input,
+    ))
+}
+
+// tpList     <- (typeParam ",")* typeParam ","?
+fn parse_tp_list(mut input: Str) -> Result {
+    orig!(TPList);
+    let mut body = vec![];
+    while let Ok((a, s)) = match parse_type_param(input) {
+        Ok((a, mut s)) => {
+            if !s.check(",") {
+                Err(())
+            } else {
+                Ok((a, s))
+            }
+        }
+        Err(_) => Err(()),
+    } {
+        input = s;
+        body.push(a);
+    }
+    match parse_type_param(input) {
+        Ok((a, s)) => {
+            input = s;
+            body.push(a);
+        }
+        Err(e) => {
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
+        }
+    }
+    input.check(",");
+    Ok((AST::TypeParams { body }, input))
+}
+
+// typeParam  <- type
+fn parse_type_param(input: Str) -> Result {
+    orig!(TypeParam);
+    match parse_type(input) {
+        Err(e) => Err(ParseError::Trace {
+            origin,
+            err: Box::new(e),
+        }),
+        o => o,
+    }
 }
 
 // exprList   <- ((blockExpr ","?) | (normExpr ","))* (blockExpr | normExpr) ","?
@@ -379,19 +518,17 @@ fn parse_expr_list(mut input: Str) -> Result {
     orig!(ExprList);
     let mut acc = vec![];
     let last;
-    while let Ok((a, s)) = {
-        if let Ok((tree, mut string)) = parse_block_expr(input) {
-            string.check(",");
-            Ok((tree, string))
-        } else if let Ok((tree, mut string)) = parse_norm_expr(input) {
-            if !string.check(",") {
-                Err(())
-            } else {
-                Ok((tree, string))
-            }
-        } else {
+    while let Ok((a, s)) = if let Ok((tree, mut string)) = parse_block_expr(input) {
+        string.check(",");
+        Ok((tree, string))
+    } else if let Ok((tree, mut string)) = parse_norm_expr(input) {
+        if !string.check(",") {
             Err(())
+        } else {
+            Ok((tree, string))
         }
+    } else {
+        Err(())
     } {
         input = s;
         acc.push(a);
@@ -419,10 +556,18 @@ fn parse_expr_list(mut input: Str) -> Result {
     Ok((AST::ExprList { body, last }, input))
 }
 
-// normExpr   <- arithmetic | dataDecl | literal | name
+// normExpr   <- funcCall | arithmetic | dataDecl | literal | name
 fn parse_norm_expr(input: Str) -> Result {
     orig!(NormExpr);
     let mut err_stack = vec![];
+    match parse_func_call(input) {
+        Err(e) => {
+            err_stack.push(e);
+        }
+        o => {
+            return o;
+        }
+    }
     match parse_arithmetic(input) {
         Err(e) => {
             err_stack.push(e);
@@ -518,7 +663,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
     let source;
     let mut body = None;
     let mut returns = false;
-    dbg!(input);
     if !input.check("for") {
         return Err(ParseError::Meta {
             origin,
@@ -526,7 +670,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("for")),
         });
     }
-    dbg!(input);
     match parse_name(input) {
         Ok((a, s)) => {
             input = s;
@@ -539,7 +682,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
             });
         }
     }
-    dbg!(input);
     if !input.check("in") {
         return Err(ParseError::Meta {
             origin,
@@ -547,7 +689,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("in")),
         });
     }
-    dbg!(input);
     match parse_norm_expr(input) {
         Ok((a, s)) => {
             input = s;
@@ -560,7 +701,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
             });
         }
     }
-    dbg!(input);
     if !input.check("->") {
         return Err(ParseError::Meta {
             origin,
@@ -568,12 +708,10 @@ fn parse_for_stmt(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("->")),
         });
     }
-    dbg!(input);
     if let Ok((a, s)) = parse_expr_list(input) {
         input = s;
         body = Some(Box::new(a));
     }
-    dbg!(input);
     match input.check(".") {
         true => {
             returns = true;
@@ -598,7 +736,6 @@ fn parse_for_stmt(mut input: Str) -> Result {
             }
         }
     }
-    dbg!(input);
     Ok((
         AST::ForStmt {
             ident,
@@ -609,6 +746,45 @@ fn parse_for_stmt(mut input: Str) -> Result {
         input,
     ))
 }
+
+// funcCall   <- name "(" exprList? ")"
+fn parse_func_call(mut input: Str) -> Result {
+    orig!(FuncCall);
+    let name;
+    let mut args = None;
+    match parse_name(input) {
+        Ok((a, s)) => {
+            input = s;
+            name = Box::new(a);
+        }
+        Err(e) => {
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
+        }
+    }
+    if !input.check("(") {
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("(")),
+        });
+    }
+    if let Ok((a, s)) = parse_expr_list(input) {
+        input = s;
+        args = Some(Box::new(a));
+    }
+    if !input.check(")") {
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected(")")),
+        });
+    }
+    Ok((AST::FuncCall { name, args }, input))
+}
+
 fn parse_arithmetic(input: Str) -> Result {
     orig!(Arithmetic);
     return Err(ParseError::Meta {
@@ -789,7 +965,8 @@ fn parse_bool_lit(mut input: Str) -> Result {
 }
 
 fn main() {
-    let input = Str::new("fn main(args: str): int ->\n\tfor a in args ->\n\t\ta;\n\t0.");
+    let input =
+        Str::new("fn main(args: *[str]): int ->\n\tfor a in args ->\n\t\tprintln(a);\n\t0.");
     let r = parse_programm(input);
     println!("{:#?}", r);
 }
