@@ -19,7 +19,7 @@ parameter  <- name typeSig
 typeSig    <- ":" name
 // here for example the last expr is returned from a function
 // unless a semicolon is used to end the block
-exprList   <- ((normExpr ",") | (blockExpr ","?))* (normExpr | blockExpr) ","?
+exprList   <- ((blockExpr ","?) | (normExpr ","))* (blockExpr | normExpr) ","?
 blockExpr  <- ifStmt | matchStmt | forStmt
 ifStmt     <-
 matchStmt  <-

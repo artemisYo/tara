@@ -1,27 +1,50 @@
 use std::ops::Deref;
 
-type Result<'a> = std::result::Result<(AST<'a>, Str<'a>), ParseError>;
+type Result<'a> = std::result::Result<(AST<'a>, Str<'a>), ParseError<'a>>;
+
+trait Set<T: std::fmt::Debug>: std::fmt::Debug {
+    fn contains(&self, _: &T) -> bool;
+}
+impl<T: std::fmt::Debug + PartialEq> Set<T> for [T] {
+    fn contains(&self, e: &T) -> bool {
+        self.contains(&e)
+    }
+}
+
+trait Origin: std::fmt::Debug {}
+
+macro_rules! orig {
+    ($name:ident) => {
+        #[derive(Debug)]
+        struct $name;
+        impl Origin for $name {}
+        #[allow(non_upper_case_globals)]
+        const origin: &dyn Origin = &$name;
+    };
+}
 
 #[derive(Debug)]
-enum ParseError {
+enum ParseError<'a> {
+    // primitives
     EndOfString,
     TodoError,
     Expected(&'static str),
-    Multiple(Vec<Self>),
-    FuncNameError(Box<Self>),
-    ParamListEmpty(Box<Self>),
-    ParamNameError(Box<Self>),
-    ParamTypeSigError(Box<Self>),
-    ExprListEmpty(Box<Self>),
-    NormExprError([Box<Self>; 4]),
-    LiteralError([Box<Self>; 4]),
-    BlockExprError([Box<Self>; 3]),
-    ForStmtIdentError(Box<Self>),
-    ForStmtSourceError(Box<Self>),
-    NameNotAlpha,
-    NumNotDigit,
-    CharNotAccepted,
-    BollNotBool,
+    InSet(&'static dyn Set<char>),
+    NotInSet(&'static dyn Set<char>),
+    // Wrappers
+    Meta {
+        origin: &'static dyn Origin,
+        loc: Str<'a>,
+        err: Box<Self>,
+    },
+    Multiple {
+        origin: &'static dyn Origin,
+        err: Vec<Self>,
+    },
+    Trace {
+        origin: &'static dyn Origin,
+        err: Box<Self>,
+    },
 }
 
 #[derive(Debug)]
@@ -82,7 +105,7 @@ impl<'a> Str<'a> {
             .map(|c| if c == '\n' { 1 } else { 0 })
             .sum::<usize>();
         if let Some(i) = self.string[self.index..self.index + x].rfind('\n') {
-            self.pos.1 = x - i;
+            self.pos.1 = x - i - 1;
         } else {
             self.pos.1 += x;
         }
@@ -103,6 +126,9 @@ impl<'a> Str<'a> {
             false
         }
     }
+    fn empty(&self) -> bool {
+        self.index == self.string.len()
+    }
 }
 
 impl<'a> Deref for Str<'a> {
@@ -117,15 +143,14 @@ impl<'a> Deref for Str<'a> {
 fn parse_programm(input: Str) -> Result {
     let mut acc = vec![];
     let mut head = input;
-    loop {
+    while !head.empty() {
         match parse_function(head) {
             Ok((a, s)) => {
                 head = s;
                 acc.push(a);
             }
             Err(e) => {
-                println!("{:?}", e);
-                break;
+                return Err(e);
             }
         }
     }
@@ -134,13 +159,18 @@ fn parse_programm(input: Str) -> Result {
 
 // function   <- "fn" name "(" paramList? ")" typeSig? "->" exprList? ("." | ";")
 fn parse_function(mut input: Str) -> Result {
+    orig!(Function);
     let name;
     let mut parameters = None;
     let mut ret_type = None;
     let mut body = None;
     let mut does_return = true;
     if !input.check("fn") {
-        return Err(ParseError::Expected("fn"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("fn")),
+        });
     }
     match parse_name(input) {
         Ok((a, s)) => {
@@ -148,25 +178,40 @@ fn parse_function(mut input: Str) -> Result {
             name = Box::new(a);
         }
         Err(e) => {
-            return Err(ParseError::FuncNameError(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
     if !input.check("(") {
-        return Err(ParseError::Expected("("));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("(")),
+        });
     }
     if let Ok((a, s)) = parse_param_list(input) {
         input = s;
         parameters = Some(Box::new(a));
     }
     if !input.check(")") {
-        return Err(ParseError::Expected(")"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected(")")),
+        });
     }
     if let Ok((a, s)) = parse_type_sig(input) {
         input = s;
         ret_type = Some(Box::new(a));
     }
     if !input.check("->") {
-        return Err(ParseError::Expected("->"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("->")),
+        });
     }
     if let Ok((a, s)) = parse_expr_list(input) {
         input = s;
@@ -175,10 +220,21 @@ fn parse_function(mut input: Str) -> Result {
     if !input.check(".") {
         does_return = false;
         if !input.check(";") {
-            return Err(ParseError::Multiple(vec![
-                ParseError::Expected("."),
-                ParseError::Expected(";"),
-            ]));
+            return Err(ParseError::Multiple {
+                origin,
+                err: vec![
+                    ParseError::Meta {
+                        origin,
+                        loc: input,
+                        err: Box::new(ParseError::Expected(".")),
+                    },
+                    ParseError::Meta {
+                        origin,
+                        loc: input,
+                        err: Box::new(ParseError::Expected(";")),
+                    },
+                ],
+            });
         }
     }
     Ok((
@@ -195,12 +251,21 @@ fn parse_function(mut input: Str) -> Result {
 
 // name       <- alpha+
 fn parse_name(mut input: Str) -> Result {
-    let i = input
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .count();
+    orig!(Name);
+    #[derive(Debug)]
+    struct Alpha;
+    impl Set<char> for Alpha {
+        fn contains(&self, c: &char) -> bool {
+            c.is_ascii_alphabetic()
+        }
+    }
+    let i = input.chars().take_while(|c| Alpha.contains(c)).count();
     if i == 0 {
-        return Err(ParseError::NameNotAlpha);
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::NotInSet(&Alpha)),
+        });
     }
     // for some god forsaken reason I cannot borrow the underlying
     // string unless its done like this
@@ -212,6 +277,7 @@ fn parse_name(mut input: Str) -> Result {
 
 // paramList  <- (parameter ",")* parameter ","?
 fn parse_param_list(mut input: Str) -> Result {
+    orig!(ParamList);
     let mut params = vec![];
     let last;
     while let Ok((a, s)) = match parse_parameter(input) {
@@ -233,7 +299,10 @@ fn parse_param_list(mut input: Str) -> Result {
             last = Box::new(a);
         }
         Err(e) => {
-            return Err(ParseError::ParamListEmpty(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
     input.check(",");
@@ -247,6 +316,7 @@ fn parse_param_list(mut input: Str) -> Result {
 
 // parameter  <- name typeSig
 fn parse_parameter(mut input: Str) -> Result {
+    orig!(Parameter);
     let name;
     let type_sig;
     match parse_name(input) {
@@ -255,7 +325,10 @@ fn parse_parameter(mut input: Str) -> Result {
             input = s;
         }
         Err(e) => {
-            return Err(ParseError::ParamNameError(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
     match parse_type_sig(input) {
@@ -264,7 +337,10 @@ fn parse_parameter(mut input: Str) -> Result {
             input = s;
         }
         Err(e) => {
-            return Err(ParseError::ParamTypeSigError(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
     Ok((AST::Parameter { name, type_sig }, input))
@@ -274,26 +350,32 @@ fn parse_parameter(mut input: Str) -> Result {
 // TODO: this thang doesn't parse more complex types such as
 // *str or [int] or whatever
 fn parse_type_sig(mut input: Str) -> Result {
+    orig!(TypeSig);
     if !input.check(":") {
-        return Err(ParseError::Expected(":"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected(":")),
+        });
     }
     parse_name(input)
 }
 
-// exprList   <- ((normExpr ",") | (blockExpr ","?))* (normExpr | blockExpr) ","?
+// exprList   <- ((blockExpr ","?) | (normExpr ","))* (blockExpr | normExpr) ","?
 fn parse_expr_list(mut input: Str) -> Result {
+    orig!(ExprList);
     let mut acc = vec![];
     let last;
     while let Ok((a, s)) = {
-        if let Ok((tree, mut string)) = parse_norm_expr(input) {
+        if let Ok((tree, mut string)) = parse_block_expr(input) {
+            string.check(",");
+            Ok((tree, string))
+        } else if let Ok((tree, mut string)) = parse_norm_expr(input) {
             if !string.check(",") {
                 Err(())
             } else {
                 Ok((tree, string))
             }
-        } else if let Ok((tree, mut string)) = parse_block_expr(input) {
-            string.check(",");
-            Ok((tree, string))
         } else {
             Err(())
         }
@@ -301,20 +383,21 @@ fn parse_expr_list(mut input: Str) -> Result {
         input = s;
         acc.push(a);
     }
-    match parse_norm_expr(input) {
+    match parse_block_expr(input) {
         Ok((a, s)) => {
             input = s;
             last = Box::new(a);
         }
-        Err(e) => match parse_block_expr(input) {
+        Err(e) => match parse_norm_expr(input) {
             Ok((a, s)) => {
                 input = s;
                 last = Box::new(a);
             }
             Err(f) => {
-                return Err(ParseError::ExprListEmpty(Box::new(ParseError::Multiple(
-                    vec![e, f],
-                ))));
+                return Err(ParseError::Multiple {
+                    origin,
+                    err: vec![e, f],
+                });
             }
         },
     }
@@ -325,11 +408,11 @@ fn parse_expr_list(mut input: Str) -> Result {
 
 // normExpr   <- arithmetic | dataDecl | literal | name
 fn parse_norm_expr(input: Str) -> Result {
-    let mut err_stack: [std::mem::MaybeUninit<Box<ParseError>>; 4] =
-        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    orig!(NormExpr);
+    let mut err_stack = vec![];
     match parse_arithmetic(input) {
         Err(e) => {
-            err_stack[0].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -337,7 +420,7 @@ fn parse_norm_expr(input: Str) -> Result {
     }
     match parse_data_decl(input) {
         Err(e) => {
-            err_stack[1].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -345,7 +428,7 @@ fn parse_norm_expr(input: Str) -> Result {
     }
     match parse_literal(input) {
         Err(e) => {
-            err_stack[2].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -353,24 +436,25 @@ fn parse_norm_expr(input: Str) -> Result {
     }
     match parse_name(input) {
         Err(e) => {
-            err_stack[3].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
         }
     }
-    Err(ParseError::NormExprError(unsafe {
-        std::mem::transmute(err_stack)
-    }))
+    Err(ParseError::Multiple {
+        origin,
+        err: err_stack,
+    })
 }
 
 // blockExpr  <- ifStmt | matchStmt | forStmt
 fn parse_block_expr(input: Str) -> Result {
-    let mut err_stack: [std::mem::MaybeUninit<Box<ParseError>>; 3] =
-        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    orig!(BlockExpr);
+    let mut err_stack = vec![];
     match parse_if_stmt(input) {
         Err(e) => {
-            err_stack[0].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -378,7 +462,7 @@ fn parse_block_expr(input: Str) -> Result {
     }
     match parse_match_stmt(input) {
         Err(e) => {
-            err_stack[1].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -386,75 +470,122 @@ fn parse_block_expr(input: Str) -> Result {
     }
     match parse_for_stmt(input) {
         Err(e) => {
-            err_stack[2].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
         }
     }
-    Err(ParseError::BlockExprError(unsafe {
-        std::mem::transmute(err_stack)
-    }))
+    Err(ParseError::Multiple {
+        origin,
+        err: err_stack,
+    })
 }
 fn parse_if_stmt(input: Str) -> Result {
-    return Err(ParseError::TodoError);
-    todo!()
+    orig!(IfStmt);
+    return Err(ParseError::Meta {
+        origin,
+        loc: input,
+        err: Box::new(ParseError::TodoError),
+    });
 }
 fn parse_match_stmt(input: Str) -> Result {
-    return Err(ParseError::TodoError);
-    todo!()
+    orig!(MatchStmt);
+    return Err(ParseError::Meta {
+        origin,
+        loc: input,
+        err: Box::new(ParseError::TodoError),
+    });
 }
 
 // forStmt    <- "for" name "in" normExpr "->" exprList? ("." | ";")
 fn parse_for_stmt(mut input: Str) -> Result {
+    orig!(ForStmt);
     let ident;
     let source;
     let mut body = None;
     let mut returns = false;
+    dbg!(input);
     if !input.check("for") {
-        return Err(ParseError::Expected("for"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("for")),
+        });
     }
+    dbg!(input);
     match parse_name(input) {
         Ok((a, s)) => {
             input = s;
             ident = Box::new(a);
         }
         Err(e) => {
-            return Err(ParseError::ForStmtIdentError(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
+    dbg!(input);
     if !input.check("in") {
-        return Err(ParseError::Expected("in"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("in")),
+        });
     }
+    dbg!(input);
     match parse_norm_expr(input) {
         Ok((a, s)) => {
             input = s;
             source = Box::new(a);
         }
         Err(e) => {
-            return Err(ParseError::ForStmtSourceError(Box::new(e)));
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
         }
     }
+    dbg!(input);
     if !input.check("->") {
-        return Err(ParseError::Expected("->"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("->")),
+        });
     }
+    dbg!(input);
     if let Ok((a, s)) = parse_expr_list(input) {
         input = s;
         body = Some(Box::new(a));
     }
+    dbg!(input);
     match input.check(".") {
         true => {
             returns = true;
         }
         false => {
             if !input.check(";") {
-                return Err(ParseError::Multiple(vec![
-                    ParseError::Expected("."),
-                    ParseError::Expected(";"),
-                ]));
+                return Err(ParseError::Multiple {
+                    origin,
+                    err: vec![
+                        ParseError::Meta {
+                            origin,
+                            loc: input,
+                            err: Box::new(ParseError::Expected(".")),
+                        },
+                        ParseError::Meta {
+                            origin,
+                            loc: input,
+                            err: Box::new(ParseError::Expected(";")),
+                        },
+                    ],
+                });
             }
         }
     }
+    dbg!(input);
     Ok((
         AST::ForStmt {
             ident,
@@ -466,21 +597,29 @@ fn parse_for_stmt(mut input: Str) -> Result {
     ))
 }
 fn parse_arithmetic(input: Str) -> Result {
-    return Err(ParseError::TodoError);
-    todo!()
+    orig!(Arithmetic);
+    return Err(ParseError::Meta {
+        origin,
+        loc: input,
+        err: Box::new(ParseError::TodoError),
+    });
 }
 fn parse_data_decl(input: Str) -> Result {
-    return Err(ParseError::TodoError);
-    todo!()
+    orig!(DataDecl);
+    return Err(ParseError::Meta {
+        origin,
+        loc: input,
+        err: Box::new(ParseError::TodoError),
+    });
 }
 
 // literal    <- numLit | strLit | charLit | boolLit
 fn parse_literal(input: Str) -> Result {
-    let mut err_stack: [std::mem::MaybeUninit<Box<ParseError>>; 4] =
-        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    orig!(Literal);
+    let mut err_stack = vec![];
     match parse_num_lit(input) {
         Err(e) => {
-            err_stack[0].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -488,7 +627,7 @@ fn parse_literal(input: Str) -> Result {
     }
     match parse_str_lit(input) {
         Err(e) => {
-            err_stack[1].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -496,7 +635,7 @@ fn parse_literal(input: Str) -> Result {
     }
     match parse_char_lit(input) {
         Err(e) => {
-            err_stack[2].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
@@ -504,22 +643,35 @@ fn parse_literal(input: Str) -> Result {
     }
     match parse_bool_lit(input) {
         Err(e) => {
-            err_stack[3].write(Box::new(e));
+            err_stack.push(e);
         }
         o => {
             return o;
         }
     }
-    Err(ParseError::LiteralError(unsafe {
-        std::mem::transmute(err_stack)
-    }))
+    Err(ParseError::Multiple {
+        origin,
+        err: err_stack,
+    })
 }
 
 // numLit     <- ('0'..'9')+
 fn parse_num_lit(mut input: Str) -> Result {
-    let i = input.chars().take_while(|c| c.is_ascii_digit()).count();
+    orig!(NumLit);
+    #[derive(Debug)]
+    struct Digit;
+    impl Set<char> for Digit {
+        fn contains(&self, c: &char) -> bool {
+            c.is_ascii_digit()
+        }
+    }
+    let i = input.chars().take_while(|c| Digit.contains(c)).count();
     if i == 0 {
-        return Err(ParseError::NumNotDigit);
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::NotInSet(&Digit)),
+        });
     }
     // for some god forsaken reason I cannot borrow the underlying
     // string unless its done like this
@@ -531,9 +683,14 @@ fn parse_num_lit(mut input: Str) -> Result {
 
 // strLit     <- "\"" (!"\"" ("\\\"" | any))* "\""
 fn parse_str_lit(mut input: Str) -> Result {
+    orig!(StrLit);
     let string;
     if !input.check("\"") {
-        return Err(ParseError::Expected("\""));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("\"")),
+        });
     }
     let mut escaped = false;
     let mut i = 0;
@@ -549,32 +706,50 @@ fn parse_str_lit(mut input: Str) -> Result {
     string = &input.string[input.index..input.index + i];
     input.advance(i);
     if !input.check("\"") {
-        return Err(ParseError::Expected("\""));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("\"")),
+        });
     }
     Ok((AST::String(string), input))
 }
 
 // charLit    <- "'" (!"'" ("\\'" | any)) "'"
 fn parse_char_lit(mut input: Str) -> Result {
+    orig!(CharLit);
     let char;
     if !input.check("'") {
-        return Err(ParseError::Expected("'"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("'")),
+        });
     }
     char = match &input.string[input.index..] {
         c if c.starts_with("\\'") => &c[..2],
         c if !c.starts_with("'") => &c[..1],
         _ => {
-            return Err(ParseError::CharNotAccepted);
+            return Err(ParseError::Meta {
+                origin,
+                loc: input,
+                err: Box::new(ParseError::TodoError),
+            });
         }
     };
     if !input.check("'") {
-        return Err(ParseError::Expected("'"));
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("'")),
+        });
     }
     Ok((AST::Char(char), input))
 }
 
 // boolLit    <- "true" | "false"
 fn parse_bool_lit(mut input: Str) -> Result {
+    orig!(BoolLit);
     let b = match &input.string[input.index..] {
         b if b.starts_with("true") => {
             input.advance(4);
@@ -585,7 +760,21 @@ fn parse_bool_lit(mut input: Str) -> Result {
             &b[5..]
         }
         _ => {
-            return Err(ParseError::BollNotBool);
+            return Err(ParseError::Multiple {
+                origin,
+                err: vec![
+                    ParseError::Meta {
+                        origin,
+                        loc: input,
+                        err: Box::new(ParseError::Expected("true")),
+                    },
+                    ParseError::Meta {
+                        origin,
+                        loc: input,
+                        err: Box::new(ParseError::Expected("false")),
+                    },
+                ],
+            });
         }
     };
     input.trim_start();
