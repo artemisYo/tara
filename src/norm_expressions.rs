@@ -1,17 +1,9 @@
 use crate::*;
 
-// normExpr   <- methodCall | funcCall | arithmetic | dataAssign | dataDecl | numRange | literal | name
+// normExpr   <- funcCall | arithmetic | dataAssign | dataDecl | numRange | literal | name
 pub fn parse_norm_expr(input: Str) -> Result {
     orig!(NormExpr);
     let mut err_stack = vec![];
-    match parse_method_call(input) {
-        Err(e) => {
-            err_stack.push(e);
-        }
-        o => {
-            return o;
-        }
-    }
     match parse_func_call(input) {
         Err(e) => {
             err_stack.push(e);
@@ -125,50 +117,25 @@ fn parse_num_range(mut input: Str) -> Result {
     Ok((AST::NumRange { start, end }, input))
 }
 
-// methodCall <- name "." funcCall
-pub fn parse_method_call(mut input: Str) -> Result {
-    orig!(MethodCall);
-    let object;
-    let method;
-    match parse_name(input) {
-        Ok((a, s)) => {
-            input = s;
-            object = Box::new(a);
-        }
-        Err(e) => {
-            return Err(ParseError::Trace {
-                origin,
-                err: Box::new(e),
-            });
-        }
-    }
-    if !input.check(".") {
-        return Err(ParseError::Meta {
-            origin,
-            loc: input,
-            err: Box::new(ParseError::Expected(".")),
-        });
-    }
-    match parse_func_call(input) {
-        Ok((a, s)) => {
-            input = s;
-            method = Box::new(a);
-        }
-        Err(e) => {
-            return Err(ParseError::Trace {
-                origin,
-                err: Box::new(e),
-            });
-        }
-    }
-    Ok((AST::MethodCall { object, method }, input))
-}
-
-// funcCall   <- name "(" exprList? ")"
+// funcCall   <- (name ".")* name "(" list(pipeLine | blockExpr | normExpr)? ")"
 pub fn parse_func_call(mut input: Str) -> Result {
     orig!(FuncCall);
     let name;
     let mut args = None;
+    let mut prefix = vec![];
+    while let Ok((a, s)) = match parse_name(input) {
+        Ok((a, mut s)) => {
+            if !s.check(".") {
+                Err(())
+            } else {
+                Ok((a, s))
+            }
+        }
+        Err(_) => Err(()),
+    } {
+        input = s;
+        prefix.push(a);
+    }
     match parse_name(input) {
         Ok((a, s)) => {
             input = s;
@@ -188,7 +155,11 @@ pub fn parse_func_call(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("(")),
         });
     }
-    if let Ok((a, s)) = parse_expr_list(input) {
+    if let Ok((a, s)) = parse_list(input, |i: Str| {
+        parse_pipe_line(i)
+            .or(parse_block_expr(i))
+            .or(parse_norm_expr(i))
+    }) {
         input = s;
         args = Some(Box::new(a));
     }
@@ -199,7 +170,7 @@ pub fn parse_func_call(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected(")")),
         });
     }
-    Ok((AST::FuncCall { name, args }, input))
+    Ok((AST::FuncCall { prefix, name, args }, input))
 }
 
 pub fn parse_arithmetic(input: Str) -> Result {
@@ -211,7 +182,7 @@ pub fn parse_arithmetic(input: Str) -> Result {
     });
 }
 
-// dataDecl   <- ("let" | "mut") name typeSig? "=" (blockExpr | normExpr)
+// dataDecl   <- ("let" | "mut") name typeSig? "=" (pipeLine | blockExpr | normExpr)
 pub fn parse_data_decl(mut input: Str) -> Result {
     orig!(DataDecl);
     let name;
@@ -262,22 +233,28 @@ pub fn parse_data_decl(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("=")),
         });
     }
-    match parse_block_expr(input) {
+    match parse_pipe_line(input) {
         Ok((a, s)) => {
             input = s;
             source = Box::new(a);
         }
-        Err(e) => match parse_norm_expr(input) {
+        Err(e) => match parse_block_expr(input) {
             Ok((a, s)) => {
                 input = s;
                 source = Box::new(a);
             }
-            Err(f) => {
-                return Err(ParseError::Multiple {
-                    origin,
-                    err: vec![e, f],
-                });
-            }
+            Err(f) => match parse_norm_expr(input) {
+                Ok((a, s)) => {
+                    input = s;
+                    source = Box::new(a);
+                }
+                Err(g) => {
+                    return Err(ParseError::Multiple {
+                        origin,
+                        err: vec![e, f, g],
+                    });
+                }
+            },
         },
     }
     Ok((
@@ -291,7 +268,7 @@ pub fn parse_data_decl(mut input: Str) -> Result {
     ))
 }
 
-// dataAssign <- name "=" (blockExpr | normExpr)
+// dataAssign <- name "=" (pipeLine | blockExpr | normExpr)
 pub fn parse_data_assign(mut input: Str) -> Result {
     orig!(DataAssign);
     let dest;
@@ -315,22 +292,28 @@ pub fn parse_data_assign(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("=")),
         });
     }
-    match parse_block_expr(input) {
+    match parse_pipe_line(input) {
         Ok((a, s)) => {
             input = s;
             source = Box::new(a);
         }
-        Err(e) => match parse_norm_expr(input) {
+        Err(e) => match parse_block_expr(input) {
             Ok((a, s)) => {
                 input = s;
                 source = Box::new(a);
             }
-            Err(f) => {
-                return Err(ParseError::Multiple {
-                    origin,
-                    err: vec![e, f],
-                });
-            }
+            Err(f) => match parse_norm_expr(input) {
+                Ok((a, s)) => {
+                    input = s;
+                    source = Box::new(a);
+                }
+                Err(g) => {
+                    return Err(ParseError::Multiple {
+                        origin,
+                        err: vec![e, f, g],
+                    });
+                }
+            },
         },
     }
     Ok((AST::DataAssign { dest, source }, input))

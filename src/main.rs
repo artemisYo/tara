@@ -88,10 +88,6 @@ pub enum AST<'a> {
         pattern: Box<Self>,
         smash: Box<Self>,
     },
-    ParamList {
-        body: Option<Vec<Self>>,
-        last: Box<Self>,
-    },
     Parameter {
         name: Box<Self>,
         type_sig: Box<Self>,
@@ -116,20 +112,21 @@ pub enum AST<'a> {
         array: Option<Vec<Option<Box<Self>>>>,
         refd: u8,
     },
-    TypeParams {
-        body: Vec<Self>,
-    },
-    MethodCall {
-        object: Box<Self>,
-        method: Box<Self>,
+    PipeLine {
+        start: Box<Self>,
+        line: Vec<Self>,
     },
     FuncCall {
+        prefix: Vec<Self>,
         name: Box<Self>,
         args: Option<Box<Self>>,
     },
     NumRange {
         start: Box<Self>,
         end: Box<Self>,
+    },
+    List {
+        list: Vec<Self>,
     },
     Name(&'a str),
     Number(&'a str),
@@ -213,7 +210,7 @@ pub fn parse_programm(input: Str) -> Result {
     return Ok((AST::Prog(acc), head));
 }
 
-// function   <- "fn" name "(" paramList? ")" typeSig? block
+// function   <- "fn" name "(" list(parameter) ")" typeSig? block
 pub fn parse_function(mut input: Str) -> Result {
     orig!(Function);
     let name;
@@ -246,7 +243,7 @@ pub fn parse_function(mut input: Str) -> Result {
             err: Box::new(ParseError::Expected("(")),
         });
     }
-    if let Ok((a, s)) = parse_param_list(input) {
+    if let Ok((a, s)) = parse_list(input, parse_parameter) {
         input = s;
         parameters = Some(Box::new(a));
     }
@@ -347,45 +344,6 @@ pub fn parse_name(mut input: Str) -> Result {
     Ok((AST::Name(name), input))
 }
 
-// paramList  <- (parameter ",")* parameter ","?
-pub fn parse_param_list(mut input: Str) -> Result {
-    orig!(ParamList);
-    let mut params = vec![];
-    let last;
-    while let Ok((a, s)) = match parse_parameter(input) {
-        Ok((tree, mut head)) => {
-            if !head.check(",") {
-                Err(())
-            } else {
-                Ok((tree, head))
-            }
-        }
-        Err(_) => Err(()),
-    } {
-        input = s;
-        params.push(a);
-    }
-    match parse_parameter(input) {
-        Ok((a, s)) => {
-            input = s;
-            last = Box::new(a);
-        }
-        Err(e) => {
-            return Err(ParseError::Trace {
-                origin,
-                err: Box::new(e),
-            });
-        }
-    }
-    input.check(",");
-    let body = if params.is_empty() {
-        None
-    } else {
-        Some(params)
-    };
-    Ok((AST::ParamList { body, last }, input))
-}
-
 // parameter  <- name typeSig
 pub fn parse_parameter(mut input: Str) -> Result {
     orig!(Parameter);
@@ -431,7 +389,7 @@ pub fn parse_type_sig(mut input: Str) -> Result {
     parse_type(input)
 }
 
-// type       <- "*"* "["*n name ("[" tpList "]")? ((";" numLit)? "]")*n
+// type       <- "*"* "["*n name ("[" list(typeParam) "]")? ((";" numLit)? "]")*n
 pub fn parse_type(mut input: Str) -> Result {
     orig!(Type);
     let mut ref_depth = 0;
@@ -458,7 +416,7 @@ pub fn parse_type(mut input: Str) -> Result {
         }
     }
     if input.check("[") {
-        match parse_tp_list(input) {
+        match parse_list(input, parse_type_param) {
             Ok((a, s)) => {
                 input = s;
                 params = Some(Box::new(a));
@@ -514,39 +472,6 @@ pub fn parse_type(mut input: Str) -> Result {
     ))
 }
 
-// tpList     <- (typeParam ",")* typeParam ","?
-pub fn parse_tp_list(mut input: Str) -> Result {
-    orig!(TPList);
-    let mut body = vec![];
-    while let Ok((a, s)) = match parse_type_param(input) {
-        Ok((a, mut s)) => {
-            if !s.check(",") {
-                Err(())
-            } else {
-                Ok((a, s))
-            }
-        }
-        Err(_) => Err(()),
-    } {
-        input = s;
-        body.push(a);
-    }
-    match parse_type_param(input) {
-        Ok((a, s)) => {
-            input = s;
-            body.push(a);
-        }
-        Err(e) => {
-            return Err(ParseError::Trace {
-                origin,
-                err: Box::new(e),
-            });
-        }
-    }
-    input.check(",");
-    Ok((AST::TypeParams { body }, input))
-}
-
 // typeParam  <- type
 pub fn parse_type_param(input: Str) -> Result {
     orig!(TypeParam);
@@ -559,12 +484,18 @@ pub fn parse_type_param(input: Str) -> Result {
     }
 }
 
-// exprList   <- ((blockExpr ","?) | (normExpr ","))* (blockExpr | normExpr)
+// exprList   <- ((pipeLine ",") | (blockExpr ","?) | (normExpr ","))* (pipeLine | blockExpr | normExpr)
 pub fn parse_expr_list(mut input: Str) -> Result {
     orig!(ExprList);
     let mut acc = vec![];
     let last;
-    while let Ok((a, s)) = if let Ok((tree, mut string)) = parse_block_expr(input) {
+    while let Ok((a, s)) = if let Ok((tree, mut string)) = parse_pipe_line(input) {
+        if !string.check(",") {
+            Err(())
+        } else {
+            Ok((tree, string))
+        }
+    } else if let Ok((tree, mut string)) = parse_block_expr(input) {
         string.check(",");
         Ok((tree, string))
     } else if let Ok((tree, mut string)) = parse_norm_expr(input) {
@@ -579,22 +510,28 @@ pub fn parse_expr_list(mut input: Str) -> Result {
         input = s;
         acc.push(a);
     }
-    match parse_block_expr(input) {
+    match parse_pipe_line(input) {
         Ok((a, s)) => {
             input = s;
             last = Box::new(a);
         }
-        Err(e) => match parse_norm_expr(input) {
+        Err(e) => match parse_block_expr(input) {
             Ok((a, s)) => {
                 input = s;
                 last = Box::new(a);
             }
-            Err(f) => {
-                return Err(ParseError::Multiple {
-                    origin,
-                    err: vec![e, f],
-                });
-            }
+            Err(f) => match parse_norm_expr(input) {
+                Ok((a, s)) => {
+                    input = s;
+                    last = Box::new(a);
+                }
+                Err(g) => {
+                    return Err(ParseError::Multiple {
+                        origin,
+                        err: vec![e, f, g],
+                    });
+                }
+            },
         },
     }
     let body = if acc.is_empty() { None } else { Some(acc) };
@@ -761,6 +698,95 @@ pub fn parse_bool_lit(mut input: Str) -> Result {
     };
     input.trim_start();
     Ok((AST::Bool(b), input))
+}
+
+// pipeLine   <- (blockExpr | normExpr) ("|>" funcCall)+
+pub fn parse_pipe_line(mut input: Str) -> Result {
+    orig!(PipeLine);
+    let start;
+    let mut line = vec![];
+    match parse_block_expr(input) {
+        Ok((a, s)) => {
+            input = s;
+            start = Box::new(a);
+        }
+        Err(e) => match parse_norm_expr(input) {
+            Ok((a, s)) => {
+                input = s;
+                start = Box::new(a);
+            }
+            Err(f) => {
+                return Err(ParseError::Multiple {
+                    origin,
+                    err: vec![e, f],
+                });
+            }
+        },
+    }
+    if !input.check("|>") {
+        return Err(ParseError::Meta {
+            origin,
+            loc: input,
+            err: Box::new(ParseError::Expected("|>")),
+        });
+    }
+    match parse_func_call(input) {
+        Ok((a, s)) => {
+            input = s;
+            line.push(a);
+        }
+        Err(e) => {
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
+        }
+    }
+    while let Ok((a, s)) = if input.check("|>") {
+        match parse_func_call(input) {
+            Err(_) => Err(()),
+            Ok((a, s)) => Ok((a, s)),
+        }
+    } else {
+        Err(())
+    } {
+        input = s;
+        line.push(a);
+    }
+    Ok((AST::PipeLine { start, line }, input))
+}
+
+// list(x)    <- (x ",")* x ","?
+fn parse_list(mut input: Str, x: fn(Str) -> Result) -> Result {
+    orig!(List);
+    let mut list = vec![];
+    while let Ok((a, s)) = match x(input) {
+        Ok((a, mut s)) => {
+            if !s.check(",") {
+                Err(())
+            } else {
+                Ok((a, s))
+            }
+        }
+        Err(_) => Err(()),
+    } {
+        input = s;
+        list.push(a);
+    }
+    match x(input) {
+        Ok((a, s)) => {
+            input = s;
+            list.push(a);
+        }
+        Err(e) => {
+            return Err(ParseError::Trace {
+                origin,
+                err: Box::new(e),
+            });
+        }
+    }
+    input.check(",");
+    Ok((AST::List { list }, input))
 }
 
 fn main() {
