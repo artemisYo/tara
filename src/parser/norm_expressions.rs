@@ -1,4 +1,4 @@
-use crate::*;
+use crate::parser::*;
 
 // normExpr   <- funcCall | arithmetic | dataAssign | dataDecl | numRange | literal | name
 pub fn parse_norm_expr(input: Str) -> Result {

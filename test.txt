@@ -1,0 +1,13 @@
+fn main(args: *[str]): int ->
+	println(fib(5)),
+	0.
+
+fn fib(count: int): Vec[int] ->
+	mut acc: Vec[int] = vec(),
+	mut a = 1,
+	mut b = 1,
+	for _ in 0..count ->
+		acc |> Vec.push(b),
+		b = a,
+		a = add(a, b);
+	acc.

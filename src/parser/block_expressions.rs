@@ -1,4 +1,4 @@
-use crate::*;
+use crate::parser::*;
 
 // blockExpr  <- ifStmt | matchStmt | forStmt | "(" exprList ")"
 pub fn parse_block_expr(mut input: Str) -> Result {
