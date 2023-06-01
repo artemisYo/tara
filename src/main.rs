@@ -1,6 +1,6 @@
-mod parser2;
+mod parser;
+mod tokenizer;
 //use parser::{parse_programm, Str};
-mod sema;
 
 fn main() {
     let _s = std::fs::read_to_string(std::path::Path::new("./test.txt")).unwrap();
