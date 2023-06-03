@@ -1,0 +1,91 @@
+// Type <- ("*" "mut"?)* "["^n Ident ("[" (Type ",")* Type "]")? ((";" Number)? "]")^n
+// Block <- TODO
+// GenParams <- "[" (GenArg ",")* GenArg "]"
+// GenArg <- Ident (":" (Ident "+")* Ident)?
+
+// ProtoDecl <- "proto" Ident GenParams? "on" GenArg "->" ((Ident ":" Type ",")* (Ident ":" Type))? ";"
+proto Ord on T ->
+	lt: fn(T, T): bool,
+	gt: fn(T, T): bool,
+	eq: fn(T, T): bool;
+
+// TypeDef  <- "type" Ident GenParams? "=" (EnumBody | StructBody)
+// EnumBody <- ("case" Ident EVField? ",")* ("case" Ident EVField?) ";"
+// EVField  <- "(" ~
+//             ((Ident ":" Type ",")* Ident ":" Type |
+//              (Type ",")* Type) ~
+//             ")"
+type BTree[T: Ord] =
+	case Node(value: T,
+			  less: *mut BTree[T], 
+			  more: *mut BTree[T]),
+	case Leaf;
+
+// FnDef <- "fn" (Ident ".")* Ident GenParams? "(" ~
+//         ((Ident ":" Type ",")* (Ident ":" Type))? ~
+//          ")" (":" Type)? Block
+fn BTree.insert[T: Ord](tree: *mut BTree[T], value: T) -> match tree ->
+	case BTree.Node(v, l, g) -> 
+		if value |> Ord.lt(v) ->
+			l |> BTree.insert(value);
+		else ->
+			g |> BTree.insert(value);
+	case BTree.Leaf ->
+		*tree = 
+			BTree.Node(value = value,
+				less = &BTree.Leaf,
+				more = &BTree.Leaf);
+// The above code has an issue in that
+// BTree.Leaf is initialized on the stack
+// which gets destroyed when the function
+// returns
+
+type Maybe[T] =
+	case Some(T),
+	case None;
+
+fn Maybe.none?[T](m: Maybe[T]): bool -> match m
+	case Some(_) -> false,
+	case None -> true.
+
+proto MutCollection[E] on T ->
+	iterate: fn(T): Iter[E],
+	push: fn(*mut T, E);
+
+// ProtoImpl <- "impl" Ident GenParams? "on" Type "->" ~
+// (Ident "=" (Ident ".")* Ident ",")* ~
+// (Ident "=" (Ident ".")* Ident)? ";"
+impl MutCollection[E] on Vec[E] ->
+	iterate = Null,
+	push = Vec.push;
+
+// StructBody <- (Ident ":" Type ",")* Ident ":" Type ";"
+type Vec[T] =
+	chunk: mut *[T],
+	capacity: mut uint,
+	length: mut uint;
+
+fn Vec.push[T](vec: *mut Vec[T], element: T) ->
+	if vec.capacity <= vec.length ->
+		vec.capacity *= 1.2,
+		vec.chunk = vec.chunk |> Array.resize(vec.capacity);
+	vec.chunk[vec.length] = element,
+	vec.length++;
+
+fn vec[T](): Vec[T] ->
+	let chunk = Array.with_capacity(10),
+	Vec(chunk=chunk, capacity=10, length=0).
+
+fn main(args: *[str]): int ->
+	println(fib(5)),
+	0.
+
+fn fib(count: int): Vec[int] ->
+	mut acc: Vec[int] = vec(),
+	acc |> Vec.push(1),
+	acc |> Vec.push(1),
+	for _ in 2..=count ->
+		let a = acc[acc.len - 1],
+		let b = acc[acc.len - 2],
+		acc |> Vec.push(a + b);
+	acc.

@@ -1,13 +1,14 @@
-fn main(args: *[str]): int ->
-	println(fib(5)),
-	0.
+// Type <- ("*" "mut"?)* "["^n Ident ("[" (Type ",")* Type "]")? ((";" Number)? "]")^n
+// Block <- TODO
+// GenParams <- "[" (GenArg ",")* GenArg "]"
+// GenArg <- Ident (":" (Ident "+")* Ident)?
 
-fn fib(count: int): Vec[int] ->
-	mut acc: Vec[int] = vec(),
-	mut a = 1,
-	mut b = 1,
-	for _ in 0..count ->
-		acc |> Vec.push(b),
-		b = a,
-		a = add(a, b);
-	acc.
+// ProtoDecl <- "proto" Ident GenParams? "on" GenArg "->" ((Ident ":" Type ",")* (Ident ":" Type))? ";"
+proto Ord on T ->
+	//lt: fn(T, T): bool,
+	//gt: fn(T, T): bool,
+	//eq: fn(T, T): bool;
+	lt: bool,
+	gt: bool,
+	eq: bool;
+

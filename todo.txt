@@ -1,0 +1,2 @@
+1. Add support for fn types like in `test2.txt` under the `Ord` protocol
+2. Handle unexpected end of stream instead of just panicking when `stack.pop()` fails
