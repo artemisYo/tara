@@ -3,12 +3,16 @@ use crate::tokenizer::Tokenstack;
 mod block;
 mod expr;
 mod top_level;
-pub use top_level::Program;
 
 #[derive(Debug)]
 pub enum Error<'a> {
     Expected {
         expected: crate::tokenizer::Token,
+        found: crate::tokenizer::Token,
+        origin: Tokenstack<'a>,
+    },
+    Multiple {
+        expected: Vec<crate::tokenizer::Token>,
         found: crate::tokenizer::Token,
         origin: Tokenstack<'a>,
     },

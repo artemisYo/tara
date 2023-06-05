@@ -1,3 +1,15 @@
+trait StartsWithStringAndSpace {
+    fn starts_with_n_stuff(&self, _: &'static str, _: &[char]) -> bool;
+}
+impl StartsWithStringAndSpace for str {
+    fn starts_with_n_stuff(&self, p: &'static str, c: &[char]) -> bool {
+        self.starts_with(p)
+            && (self.len() == p.len()
+                || self.chars().nth(p.len()).unwrap().is_whitespace()
+                || c.contains(&self.chars().nth(p.len()).unwrap()))
+    }
+}
+
 // this is basically the extent of the microsyntax
 // whitespace is stripped before attempting to parse a token
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -22,19 +34,21 @@ pub enum Token {
     Star,          //<- '*'
     Equals,        //<- '='
     Arrow,         //<- "->"
-    FnKey,         //<- "fn"
-    ForKey,        //<- "for"
-    InKey,         //<- "in"
-    OnKey,         //<- "on"
-    IfKey,         //<- "if"
-    ElseKey,       //<- "else"
-    LetKey,        //<- "let"
-    MutKey,        //<- "mut"
-    MatchKey,      //<- "match"
-    CaseKey,       //<- "case"
-    TypeKey,       //<- "type"
-    ProtoKey,      //<- "proto"
-    ImplKey,       //<- "impl"
+    FnKey,         //<- "fn" &whitespace
+    ForKey,        //<- "for" &whitespace
+    InKey,         //<- "in" &whitespace
+    OnKey,         //<- "on" &whitespace
+    IfKey,         //<- "if" &whitespace
+    ElseKey,       //<- "else" &whitespace
+    LetKey,        //<- "let" &whitespace
+    MutKey,        //<- "mut" &whitespace
+    MatchKey,      //<- "match" &whitespace
+    CaseKey,       //<- "case" &whitespace
+    TypeKey,       //<- "type" &whitespace
+    ProtoKey,      //<- "proto" &whitespace
+    ImplKey,       //<- "impl" &whitespace
+    DoKey,         //<- "do" &whitespace
+    EndKey,        //<- "end" &whitespace
     Ident(String), //<- else (!whitespace any)*
 }
 impl Token {
@@ -61,8 +75,9 @@ impl Token {
             | Token::Arrow
             | Token::FnKey
             | Token::InKey
-            | Token::IfKey => 2,
-            Token::ForKey | Token::LetKey | Token::MutKey => 3,
+            | Token::IfKey
+            | Token::DoKey => 2,
+            Token::ForKey | Token::LetKey | Token::MutKey | Token::EndKey => 3,
             Token::ImplKey | Token::CaseKey | Token::TypeKey | Token::ElseKey => 4,
             Token::ProtoKey | Token::MatchKey => 5,
             Token::Ident(s) => s.len(),
@@ -93,20 +108,22 @@ impl Token {
             ':' => Token::Colon,
             '*' => Token::Star,
             '=' => Token::Equals,
-            _ if string.starts_with("->") => Token::Arrow,
-            _ if string.starts_with("fn") => Token::FnKey,
-            _ if string.starts_with("on") => Token::OnKey,
-            _ if string.starts_with("for") => Token::ForKey,
-            _ if string.starts_with("in") => Token::InKey,
-            _ if string.starts_with("if") => Token::IfKey,
-            _ if string.starts_with("else") => Token::ElseKey,
-            _ if string.starts_with("case") => Token::CaseKey,
-            _ if string.starts_with("type") => Token::TypeKey,
-            _ if string.starts_with("proto") => Token::ProtoKey,
-            _ if string.starts_with("match") => Token::MatchKey,
-            _ if string.starts_with("impl") => Token::ImplKey,
-            _ if string.starts_with("let") => Token::LetKey,
-            _ if string.starts_with("mut") => Token::MutKey,
+            _ if string.starts_with_n_stuff("->", &[]) => Token::Arrow,
+            _ if string.starts_with_n_stuff("fn", &['(']) => Token::FnKey,
+            _ if string.starts_with_n_stuff("on", &[]) => Token::OnKey,
+            _ if string.starts_with_n_stuff("do", &[]) => Token::DoKey,
+            _ if string.starts_with_n_stuff("end", &[]) => Token::EndKey,
+            _ if string.starts_with_n_stuff("for", &[]) => Token::ForKey,
+            _ if string.starts_with_n_stuff("in", &[]) => Token::InKey,
+            _ if string.starts_with_n_stuff("if", &[]) => Token::IfKey,
+            _ if string.starts_with_n_stuff("else", &[]) => Token::ElseKey,
+            _ if string.starts_with_n_stuff("case", &[]) => Token::CaseKey,
+            _ if string.starts_with_n_stuff("type", &[]) => Token::TypeKey,
+            _ if string.starts_with_n_stuff("proto", &[]) => Token::ProtoKey,
+            _ if string.starts_with_n_stuff("match", &[]) => Token::MatchKey,
+            _ if string.starts_with_n_stuff("impl", &[]) => Token::ImplKey,
+            _ if string.starts_with_n_stuff("let", &[]) => Token::LetKey,
+            _ if string.starts_with_n_stuff("mut", &[]) => Token::MutKey,
             // change this to not recognize strings like "Vec:push"
             // as one Ident
             _ => Token::Ident(
@@ -114,8 +131,7 @@ impl Token {
                     .find(|c: char| {
                         c.is_whitespace()
                             || [
-                                '.', ',', ':', ';', '*', '-', '"', '\'', '+', '[', ']', '(', ')',
-                                '=',
+                                '.', ',', ':', ';', '*', '"', '\'', '+', '[', ']', '(', ')', '=',
                             ]
                             .contains(&c)
                     })
@@ -169,7 +185,7 @@ impl Tokenstream {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Tokenstack<'a>(&'a [Token], usize);
 impl<'a> Tokenstack<'a> {
     pub fn lookahead(&self, x: usize) -> &Token {
@@ -193,6 +209,11 @@ impl<'a> Tokenstack<'a> {
     }
     pub fn is_empty(&self) -> bool {
         self.0.len() == self.1
+    }
+}
+impl std::fmt::Debug for Tokenstack<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", &self.0[self.1..])
     }
 }
 

@@ -1,4 +1,5 @@
 // Type <- ("*" "mut"?)* "["^n Ident ("[" (Type ",")* Type "]")? ((";" Number)? "]")^n
+//       | "fn" "(" ((Type ",")* Type)? )" (":" Type)?
 // Block <- TODO
 // GenParams <- "[" (GenArg ",")* GenArg "]"
 // GenArg <- Ident (":" (Ident "+")* Ident)?
@@ -24,7 +25,10 @@ type BTree[T: Ord] =
 // FnDef <- "fn" (Ident ".")* Ident GenParams? "(" ~
 //         ((Ident ":" Type ",")* (Ident ":" Type))? ~
 //          ")" (":" Type)? Block
-fn BTree.insert[T: Ord](tree: *mut BTree[T], value: T) -> match tree ->
+// MatchStmt <- "match" Expression "->" MatchCase+
+// MatchCase <- "case" Expression Block
+// IfStmt <- "if" Expression Block ("else" Block)?
+fn BTree.insert[T: Ord](tree: *mut BTree[T], value: T) match tree ->
 	case BTree.Node(v, l, g) -> 
 		if value |> Ord.lt(v) ->
 			l |> BTree.insert(value);
@@ -44,7 +48,7 @@ type Maybe[T] =
 	case Some(T),
 	case None;
 
-fn Maybe.none?[T](m: Maybe[T]): bool -> match m
+fn Maybe.none?[T](m: Maybe[T]): bool match m
 	case Some(_) -> false,
 	case None -> true.
 
@@ -80,6 +84,7 @@ fn main(args: *[str]): int ->
 	println(fib(5)),
 	0.
 
+// ForStmt <- "for" Ident "in" Expression Block
 fn fib(count: int): Vec[int] ->
 	mut acc: Vec[int] = vec(),
 	acc |> Vec.push(1),
