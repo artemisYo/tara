@@ -25,6 +25,8 @@ pub enum Token {
     CloseParen,    //<- ')'
     OpenBracket,   //<- '['
     CloseBracket,  //<- ']'
+    OpenCurly,     //<- "{"
+    CloseCurly,    //<- "}"
     Accessor,      //<- '.' !whitespace
     Period,        //<- '.' &whitespace
     DPeriod,       //<- ".."
@@ -46,6 +48,8 @@ pub enum Token {
     CaseKey,       //<- "case" &whitespace
     TypeKey,       //<- "type" &whitespace
     ProtoKey,      //<- "proto" &whitespace
+    ReadableKey,   //<- "readable" &whitespace
+    WriteableKey,  //<- "writeable" &whitespace
     ImplKey,       //<- "impl" &whitespace
     DoKey,         //<- "do" &whitespace
     EndKey,        //<- "end" &whitespace
@@ -63,6 +67,8 @@ impl Token {
             | Token::CloseParen
             | Token::OpenBracket
             | Token::CloseBracket
+            | Token::OpenCurly
+            | Token::CloseCurly
             | Token::Period
             | Token::SemiCol
             | Token::Colon
@@ -80,54 +86,58 @@ impl Token {
             Token::ForKey | Token::LetKey | Token::MutKey | Token::EndKey => 3,
             Token::ImplKey | Token::CaseKey | Token::TypeKey | Token::ElseKey => 4,
             Token::ProtoKey | Token::MatchKey => 5,
+            Token::ReadableKey => 8,
+            Token::WriteableKey => 9,
             Token::Ident(s) => s.len(),
         }
     }
-    pub fn parse(string: &str) -> Self {
+    pub fn parse(string: &str) -> Option<Self> {
         match string.chars().nth(0).unwrap() {
-            c if c.is_ascii_digit() => tokenize_num(string),
-            c if c == '"' => tokenize_strlit(string),
-            c if c == '\'' => tokenize_char(string),
-            _ if string.starts_with("true") => Token::Bool(string[..4].to_owned()),
-            _ if string.starts_with("false") => Token::Bool(string[..5].to_owned()),
-            _ if string.starts_with("..") => Token::DPeriod,
-            '+' => Token::Plus,
-            '(' => Token::OpenParen,
-            ')' => Token::CloseParen,
-            '[' => Token::OpenBracket,
-            ']' => Token::CloseBracket,
+            c if c.is_ascii_digit() => Some(tokenize_num(string)),
+            c if c == '"' => Some(tokenize_strlit(string)),
+            c if c == '\'' => Some(tokenize_char(string)),
+            _ if string.starts_with("true") => Some(Token::Bool(string[..4].to_owned())),
+            _ if string.starts_with("false") => Some(Token::Bool(string[..5].to_owned())),
+            _ if string.starts_with("..") => Some(Token::DPeriod),
+            '+' => Some(Token::Plus),
+            '(' => Some(Token::OpenParen),
+            ')' => Some(Token::CloseParen),
+            '[' => Some(Token::OpenBracket),
+            ']' => Some(Token::CloseBracket),
+            '{' => Some(Token::OpenCurly),
+            '}' => Some(Token::CloseCurly),
             '.' => {
                 if string.chars().nth(1).is_some_and(|c| c.is_whitespace()) {
-                    Token::Period
+                    Some(Token::Period)
                 } else {
-                    Token::Accessor
+                    Some(Token::Accessor)
                 }
             }
-            ',' => Token::Comma,
-            ';' => Token::SemiCol,
-            ':' => Token::Colon,
-            '*' => Token::Star,
-            '=' => Token::Equals,
-            _ if string.starts_with_n_stuff("->", &[]) => Token::Arrow,
-            _ if string.starts_with_n_stuff("fn", &['(']) => Token::FnKey,
-            _ if string.starts_with_n_stuff("on", &[]) => Token::OnKey,
-            _ if string.starts_with_n_stuff("do", &[]) => Token::DoKey,
-            _ if string.starts_with_n_stuff("end", &[]) => Token::EndKey,
-            _ if string.starts_with_n_stuff("for", &[]) => Token::ForKey,
-            _ if string.starts_with_n_stuff("in", &[]) => Token::InKey,
-            _ if string.starts_with_n_stuff("if", &[]) => Token::IfKey,
-            _ if string.starts_with_n_stuff("else", &[]) => Token::ElseKey,
-            _ if string.starts_with_n_stuff("case", &[]) => Token::CaseKey,
-            _ if string.starts_with_n_stuff("type", &[]) => Token::TypeKey,
-            _ if string.starts_with_n_stuff("proto", &[]) => Token::ProtoKey,
-            _ if string.starts_with_n_stuff("match", &[]) => Token::MatchKey,
-            _ if string.starts_with_n_stuff("impl", &[]) => Token::ImplKey,
-            _ if string.starts_with_n_stuff("let", &[]) => Token::LetKey,
-            _ if string.starts_with_n_stuff("mut", &[]) => Token::MutKey,
-            // change this to not recognize strings like "Vec:push"
-            // as one Ident
-            _ => Token::Ident(
-                string[..string
+            ',' => Some(Token::Comma),
+            ';' => Some(Token::SemiCol),
+            ':' => Some(Token::Colon),
+            '*' => Some(Token::Star),
+            '=' => Some(Token::Equals),
+            _ if string.starts_with_n_stuff("->", &[]) => Some(Token::Arrow),
+            _ if string.starts_with_n_stuff("fn", &['(']) => Some(Token::FnKey),
+            _ if string.starts_with_n_stuff("on", &[]) => Some(Token::OnKey),
+            _ if string.starts_with_n_stuff("do", &[]) => Some(Token::DoKey),
+            _ if string.starts_with_n_stuff("end", &[]) => Some(Token::EndKey),
+            _ if string.starts_with_n_stuff("for", &[]) => Some(Token::ForKey),
+            _ if string.starts_with_n_stuff("in", &[]) => Some(Token::InKey),
+            _ if string.starts_with_n_stuff("if", &[]) => Some(Token::IfKey),
+            _ if string.starts_with_n_stuff("else", &[]) => Some(Token::ElseKey),
+            _ if string.starts_with_n_stuff("case", &[]) => Some(Token::CaseKey),
+            _ if string.starts_with_n_stuff("type", &[]) => Some(Token::TypeKey),
+            _ if string.starts_with_n_stuff("proto", &[]) => Some(Token::ProtoKey),
+            _ if string.starts_with_n_stuff("match", &[]) => Some(Token::MatchKey),
+            _ if string.starts_with_n_stuff("impl", &[]) => Some(Token::ImplKey),
+            _ if string.starts_with_n_stuff("let", &[]) => Some(Token::LetKey),
+            _ if string.starts_with_n_stuff("mut", &[]) => Some(Token::MutKey),
+            _ if string.starts_with_n_stuff("readable", &[]) => Some(Token::ReadableKey),
+            _ if string.starts_with_n_stuff("writeable", &[]) => Some(Token::WriteableKey),
+            _ => {
+                let x = string
                     .find(|c: char| {
                         c.is_whitespace()
                             || [
@@ -135,9 +145,12 @@ impl Token {
                             ]
                             .contains(&c)
                     })
-                    .unwrap_or(string.len())]
-                    .to_owned(),
-            ),
+                    .unwrap_or(string.len());
+                if x == 0 {
+                    return None;
+                }
+                Some(Token::Ident(string[..x].to_owned()))
+            }
         }
     }
     pub fn is_ident(&self) -> bool {
@@ -150,12 +163,6 @@ impl Token {
         match self {
             Self::Num(_) => true,
             _ => false,
-        }
-    }
-    pub fn as_usize(&self) -> usize {
-        match self {
-            Self::Num(x) => x.parse().unwrap(),
-            _ => panic!("tried to make a non-num token usize"),
         }
     }
 }
@@ -173,15 +180,38 @@ impl Tokenstream {
                 if input.is_empty() {
                     break;
                 }
-                let t = Token::parse(input);
-                input = &input[t.len()..];
-                acc.push(t);
+                match Token::parse(input) {
+                    Some(t) => {
+                        input = &input[t.len()..];
+                        acc.push(t);
+                    }
+                    None => {
+                        input = &input[1..];
+                    }
+                }
             }
         }
         Self(acc)
     }
     pub fn stack(&self) -> Tokenstack {
         Tokenstack(&self.0, 0)
+    }
+}
+
+pub trait TokenPredicate {
+    fn eval(self, _: &Token) -> bool;
+}
+impl TokenPredicate for Token {
+    fn eval(self, t: &Token) -> bool {
+        &self == t
+    }
+}
+impl<T> TokenPredicate for T
+where
+    T: FnOnce(&Token) -> bool,
+{
+    fn eval(self, t: &Token) -> bool {
+        self(t)
     }
 }
 
@@ -195,11 +225,28 @@ impl<'a> Tokenstack<'a> {
         &self.0[self.1]
     }
     pub fn pop(&mut self) -> Token {
-        if self.0.len() <= self.1 {
+        if self.is_empty() {
             panic!("Tried to pop an empty stack!");
         }
         self.1 += 1;
         self.0[self.1 - 1].clone()
+    }
+    pub fn pop_if(&mut self, predicate: impl TokenPredicate) -> Option<Token> {
+        if self.next_is(predicate) {
+            Some(self.pop())
+        } else {
+            None
+        }
+    }
+    pub fn next_is(&self, predicate: impl TokenPredicate) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        if predicate.eval(&self.0[self.1]) {
+            true
+        } else {
+            false
+        }
     }
     pub fn unpop(&mut self) {
         if self.1 == 0 {
@@ -208,7 +255,7 @@ impl<'a> Tokenstack<'a> {
         self.1 -= 1;
     }
     pub fn is_empty(&self) -> bool {
-        self.0.len() == self.1
+        self.0.len() <= self.1
     }
 }
 impl std::fmt::Debug for Tokenstack<'_> {

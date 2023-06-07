@@ -1,8 +1,12 @@
 use crate::tokenizer::Tokenstack;
 
-mod block;
-mod expr;
-mod top_level;
+mod generics;
+mod implements;
+mod protocol;
+mod root;
+mod typedef;
+mod types;
+pub use root::parse;
 
 #[derive(Debug)]
 pub enum Error<'a> {
@@ -22,14 +26,9 @@ pub enum Error<'a> {
 #[macro_export]
 macro_rules! expect {
     ($source:ident, $pattern:expr) => {
-        let t = $source.pop();
-        if &t != &$pattern {
-            return Err(crate::parser::Error::Expected {
-                expected: $pattern,
-                found: t,
-                origin: $source,
-            });
-        }
+        $source
+            .pop_if($pattern)
+            .ok_or(crate::parser::Error::Empty)?;
     };
 }
 

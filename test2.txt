@@ -1,96 +1,104 @@
-// Type <- ("*" "mut"?)* "["^n Ident ("[" (Type ",")* Type "]")? ((";" Number)? "]")^n
-//       | "fn" "(" ((Type ",")* Type)? )" (":" Type)?
-// Block <- TODO
-// GenParams <- "[" (GenArg ",")* GenArg "]"
-// GenArg <- Ident (":" (Ident "+")* Ident)?
-
-// ProtoDecl <- "proto" Ident GenParams? "on" GenArg "->" ((Ident ":" Type ",")* (Ident ":" Type))? ";"
-proto Ord on T ->
+// Protocol <- "proto" Ident GenericArgs "on" Ident ProtocolBody
+// ProtocolBody <- "{" (Ident ":" Type ",")* (Ident ":" Type)? "}"
+proto Ord on T {
 	lt: fn(T, T): bool,
 	gt: fn(T, T): bool,
-	eq: fn(T, T): bool;
+	eq: fn(T, T): bool,
+}
 
-// TypeDef  <- "type" Ident GenParams? "=" (EnumBody | StructBody)
-// EnumBody <- ("case" Ident EVField? ",")* ("case" Ident EVField?) ";"
-// EVField  <- "(" ~
-//             ((Ident ":" Type ",")* Ident ":" Type |
-//              (Type ",")* Type) ~
-//             ")"
-type BTree[T: Ord] =
-	case Node(value: T,
-			  less: *mut BTree[T], 
-			  more: *mut BTree[T]),
-	case Leaf;
+// GenericArgs <- ("[" (Ident Constraints ",")* (Ident Constraints)? "]")?
+// Constraints <- (":" (Ident GenericsSupplied "+")* Ident GenericsSupplied)?
+// GenericsSupplied <- ("[" (Type ",")* (Type)? "]")?
+// TypeDef <- "type" Ident GenericArgs TypeDefBody
+// TypeDefBody.Struct <- "{" (Ident ":" Type ",")* (Ident ":" Type)? "}"
+// TypeDefBody.Enum <- "{" ("case" Ident EnumCase ",")* ("case" Ident EnumCase)? "}"
+// TypeDefBody.Singlet <- ";"
+// EnumCase.Struct <- TypeDefBody.Struct
+// EnumCase.Tuple <- "(" (Type ",")* Type? ")"
+// EnumCase.Singlet <- ""
+type BTree[T: Ord] {
+	case Node {
+		value: T,
+		less: *mut BTree[T], 
+		more: *mut BTree[T],
+	},
+	case Leaf,
+}
 
-// FnDef <- "fn" (Ident ".")* Ident GenParams? "(" ~
-//         ((Ident ":" Type ",")* (Ident ":" Type))? ~
-//          ")" (":" Type)? Block
-// MatchStmt <- "match" Expression "->" MatchCase+
-// MatchCase <- "case" Expression Block
-// IfStmt <- "if" Expression Block ("else" Block)?
-fn BTree.insert[T: Ord](tree: *mut BTree[T], value: T) match tree ->
-	case BTree.Node(v, l, g) -> 
-		if value |> Ord.lt(v) ->
-			l |> BTree.insert(value);
-		else ->
-			g |> BTree.insert(value);
-	case BTree.Leaf ->
-		*tree = 
-			BTree.Node(value = value,
+fn insert[T: Ord] on *mut BTree[T](value: T) match this {
+	case BTree.Node(v, l, g) {
+		if value |> Ord.lt(v) {
+			l.insert(value);
+		}
+		else {
+			g.insert(value);
+		}
+	}
+	case BTree.Leaf {
+		*this = 
+			BTree.Node{value = value,
 				less = &BTree.Leaf,
-				more = &BTree.Leaf);
-// The above code has an issue in that
-// BTree.Leaf is initialized on the stack
-// which gets destroyed when the function
-// returns
+				more = &BTree.Leaf};
+	}
+}
 
-type Maybe[T] =
+type Maybe[T] {
 	case Some(T),
-	case None;
+	case None,
+}
 
-fn Maybe.none?[T](m: Maybe[T]): bool match m
-	case Some(_) -> false,
-	case None -> true.
+fn none?[T] on Maybe[T](): bool match this {
+	case Some(_) { false }
+	case None { true }
+}
 
-proto MutCollection[E] on T ->
+proto MutCollection[E] on T {
 	iterate: fn(T): Iter[E],
-	push: fn(*mut T, E);
+	push: fn(*mut T, E),
+}
 
-// ProtoImpl <- "impl" Ident GenParams? "on" Type "->" ~
-// (Ident "=" (Ident ".")* Ident ",")* ~
-// (Ident "=" (Ident ".")* Ident)? ";"
-impl MutCollection[E] on Vec[E] ->
+// Implement <- "impl" Ident GenericArgs "on" Type ImplementBody
+// ImplementBody <- "{" (Ident "=" FnPath ",")* (Ident "=" FnPath)? "}"
+// FnPath <- (Ident ".")* Ident
+impl MutCollection[E] on Vec[E] {
 	iterate = Null,
-	push = Vec.push;
+	push = Vec.push,
+}
 
-// StructBody <- (Ident ":" Type ",")* Ident ":" Type ";"
-type Vec[T] =
+type Vec[T] {
 	chunk: mut *[T],
 	capacity: mut uint,
-	length: mut uint;
+	readable length: mut uint,
+}
 
-fn Vec.push[T](vec: *mut Vec[T], element: T) ->
-	if vec.capacity <= vec.length ->
-		vec.capacity *= 1.2,
-		vec.chunk = vec.chunk |> Array.resize(vec.capacity);
-	vec.chunk[vec.length] = element,
-	vec.length++;
+fn push[T] on Vec[T](element: T) {
+	if this.capacity <= vec.length {
+		this.capacity *= 1.2;
+		this.chunk = this.chunk.resize(this.capacity);
+	}
+	this.chunk[vec.length] = element;
+	this.length++;
+}
 
-fn vec[T](): Vec[T] ->
-	let chunk = Array.with_capacity(10),
-	Vec(chunk=chunk, capacity=10, length=0).
+fn new[T] for Vec[T](): Vec[T] {
+	let chunk = Array.with_capacity(10);
+	Vec(chunk=chunk, capacity=10, length=0)
+}
 
-fn main(args: *[str]): int ->
-	println(fib(5)),
-	0.
+// Type.Fn <- "fn" GenericsSupplied "(" (Type ",")* Type? ")" (":" Type)?
+// Type.Plain <- "mut"? ("*" "mut"?)* "["^n Ident GenericsSupplied ((";" Num)? "]")^n
+fn main(args: *[str]) {
+	println(fib(5));
+}
 
-// ForStmt <- "for" Ident "in" Expression Block
-fn fib(count: int): Vec[int] ->
-	mut acc: Vec[int] = vec(),
-	acc |> Vec.push(1),
-	acc |> Vec.push(1),
-	for _ in 2..=count ->
-		let a = acc[acc.len - 1],
-		let b = acc[acc.len - 2],
-		acc |> Vec.push(a + b);
-	acc.
+fn fib(count: int): Vec[int] {
+	mut acc: Vec[int] = Vec.new(),
+	acc.push(1);
+	acc.push(1);
+	for _ in 2..=count {
+		let a = acc[acc.length - 1];
+		let b = acc[acc.length - 2];
+		acc.push(a + b);
+	}
+	acc
+}
