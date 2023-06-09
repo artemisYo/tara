@@ -1,7 +1,12 @@
 use crate::tokenizer::Tokenstack;
 
+mod codeblocks;
+mod executable;
+mod expressions;
+mod func;
 mod generics;
 mod implements;
+mod postexecutable;
 mod protocol;
 mod root;
 mod typedef;
@@ -32,24 +37,12 @@ macro_rules! expect {
     };
 }
 
-pub(in crate::parser) type PRes<'a, T> = Result<(Tokenstack<'a>, T), Error<'a>>;
-
-pub(in crate::parser) fn list<T>(
-    mut input: Tokenstack,
-    f: impl Fn(Tokenstack) -> PRes<T>,
-) -> PRes<Vec<T>> {
-    let mut acc = vec![];
-    while let Ok((s, a)) = f(input) {
-        input = s;
-        acc.push(a);
-        match input.peek() {
-            crate::tokenizer::Token::Comma => {
-                input.pop();
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-    Ok((input, acc))
+#[macro_export]
+macro_rules! choose_first {
+    ($input:ident, $($parser:path),+) => {
+        $(if let Ok((s, a)) = $parser($input) {Ok((s, Box::new(a)))} else)+
+        {Err(crate::parser::Error::Empty)}
+    };
 }
+
+pub(in crate::parser) type PRes<'a, T> = Result<(Tokenstack<'a>, T), Error<'a>>;

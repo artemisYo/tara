@@ -21,7 +21,7 @@ pub struct ProtocolBody {
     fields: Vec<(Token, Type)>,
 }
 
-pub(super) fn parse(mut input: Tokenstack) -> PRes<Protocol> {
+pub fn parse(mut input: Tokenstack) -> PRes<Protocol> {
     expect!(input, Token::ProtoKey);
     let name = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
     let (s, generics) = generics::declared::parse(input)?;

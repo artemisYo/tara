@@ -20,7 +20,9 @@ pub enum Token {
     Str(String),   //<- '"' (!'"' (any | '\\' '"'))* '"'
     Char(String),  //<- '\'' (!'\'' (any | '\\' '\'')) '\''
     Bool(String),  //<- "true" | "false"
+    Arrow,         //<- "->"
     Plus,          //<- '+'
+    Minus,         //<- '-'
     OpenParen,     //<- '('
     CloseParen,    //<- ')'
     OpenBracket,   //<- '['
@@ -35,7 +37,6 @@ pub enum Token {
     Colon,         //<- ':'
     Star,          //<- '*'
     Equals,        //<- '='
-    Arrow,         //<- "->"
     FnKey,         //<- "fn" &whitespace
     ForKey,        //<- "for" &whitespace
     InKey,         //<- "in" &whitespace
@@ -75,6 +76,7 @@ impl Token {
             | Token::Star
             | Token::Comma
             | Token::Plus
+            | Token::Minus
             | Token::Equals => 1,
             Token::OnKey
             | Token::DPeriod
@@ -119,6 +121,7 @@ impl Token {
             '*' => Some(Token::Star),
             '=' => Some(Token::Equals),
             _ if string.starts_with_n_stuff("->", &[]) => Some(Token::Arrow),
+            '-' => Some(Token::Minus),
             _ if string.starts_with_n_stuff("fn", &['(']) => Some(Token::FnKey),
             _ if string.starts_with_n_stuff("on", &[]) => Some(Token::OnKey),
             _ if string.starts_with_n_stuff("do", &[]) => Some(Token::DoKey),
@@ -218,9 +221,6 @@ where
 #[derive(Clone, Copy)]
 pub struct Tokenstack<'a>(&'a [Token], usize);
 impl<'a> Tokenstack<'a> {
-    pub fn lookahead(&self, x: usize) -> &Token {
-        &self.0[self.1 + x]
-    }
     pub fn peek(&self) -> &Token {
         &self.0[self.1]
     }
@@ -247,12 +247,6 @@ impl<'a> Tokenstack<'a> {
         } else {
             false
         }
-    }
-    pub fn unpop(&mut self) {
-        if self.1 == 0 {
-            panic!("Tried to unpop a full stack!");
-        }
-        self.1 -= 1;
     }
     pub fn is_empty(&self) -> bool {
         self.0.len() <= self.1

@@ -4,6 +4,7 @@ use crate::{
 };
 
 use super::{
+    func::{self, Function},
     implements::{self, Implement},
     protocol::Protocol,
     typedef::TypeDef,
@@ -12,7 +13,7 @@ use super::{
 
 #[derive(Debug)]
 pub struct Root {
-    funcs: (),
+    funcs: Vec<Function>,
     protos: Vec<Protocol>,
     impls: Vec<Implement>,
     types: Vec<TypeDef>,
@@ -20,21 +21,24 @@ pub struct Root {
 
 pub fn parse(mut input: Tokenstack) -> PRes<Root> {
     let mut out = Root {
-        funcs: (),
+        funcs: vec![],
         protos: vec![],
         impls: vec![],
         types: vec![],
     };
     loop {
-        if let Ok((s, a)) = implements::parse(input) {
+        if let Ok((s, a)) = func::parse(input) {
             input = s;
-            out.impls.push(a);
-        } else if let Ok((s, a)) = protocol::parse(input) {
+            out.funcs.push(a);
+        } else if let Ok((s, b)) = implements::parse(input) {
             input = s;
-            out.protos.push(a);
-        } else if let Ok((s, b)) = typedef::parse(input) {
+            out.impls.push(b);
+        } else if let Ok((s, c)) = protocol::parse(input) {
             input = s;
-            out.types.push(b);
+            out.protos.push(c);
+        } else if let Ok((s, d)) = typedef::parse(input) {
+            input = s;
+            out.types.push(d);
         } else {
             break;
         }

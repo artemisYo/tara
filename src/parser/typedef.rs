@@ -38,7 +38,7 @@ pub enum EnumCase {
     Singlet,
 }
 
-pub(super) fn parse(mut input: Tokenstack) -> PRes<TypeDef> {
+pub fn parse(mut input: Tokenstack) -> PRes<TypeDef> {
     expect!(input, Token::TypeKey);
     let name = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
     let (s, generics) = generics::declared::parse(input)?;

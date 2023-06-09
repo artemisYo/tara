@@ -26,3 +26,19 @@ impl MutCollection[E] on Vec[E] {
 	iterate = Null,
 	push = Vec.push,
 }
+// Range <- ".." "="? Executable
+// PlusAndMinus <- ("+" | "-") Executable
+fn fib(count: int): Vec[int] {
+	mut acc: Vec[int] = Vec.new();
+	acc.push(1);
+	acc.push(1);
+	for _ in 2..=count {
+		let a = acc[acc.length - 1];
+		let b = acc[acc.length - 2];
+		acc.push(a + b);
+	}
+	acc
+}
+fn push[E] on *mut Vec[E](element: E) {
+	todo()
+}

@@ -1,3 +1,5 @@
+// Implement <- "impl" Ident GenericArgs "on" Type ImplementBody
+// ImplementBody <- "{" (Ident "=" FnPath ",")* (Ident "=" FnPath)? "}"
 use crate::{
     expect,
     parser::{generics, types, Error},
@@ -16,7 +18,7 @@ pub struct Implement {
 #[derive(Debug)]
 pub struct ImplementBody(Vec<(Token, Vec<Token>)>);
 
-pub(super) fn parse(mut input: Tokenstack) -> PRes<Implement> {
+pub fn parse(mut input: Tokenstack) -> PRes<Implement> {
     expect!(input, Token::ImplKey);
     let protocol = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
     let (s, generics) = generics::declared::parse(input)?;

@@ -16,7 +16,7 @@ pub mod declared {
     #[derive(Debug)]
     pub struct Constraints(Vec<(Token, GenericsSupplied)>);
 
-    pub(in super::super) fn parse(mut input: Tokenstack) -> PRes<GenericArgs> {
+    pub fn parse(mut input: Tokenstack) -> PRes<GenericArgs> {
         let mut acc = vec![];
         if input.pop_if(Token::OpenBracket).is_some() {
             // run any amount of times
@@ -65,7 +65,7 @@ pub mod supplied {
     use super::super::{types::Type, PRes};
     #[derive(Debug)]
     pub struct GenericsSupplied(Vec<Type>);
-    pub(in super::super) fn parse(mut input: Tokenstack) -> PRes<GenericsSupplied> {
+    pub fn parse(mut input: Tokenstack) -> PRes<GenericsSupplied> {
         let mut acc = vec![];
         if input.pop_if(Token::OpenBracket).is_some() {
             // runs any amount of times

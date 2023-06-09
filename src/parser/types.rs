@@ -24,7 +24,7 @@ pub enum Type {
     },
 }
 
-pub(super) fn parse(input: Tokenstack) -> PRes<Type> {
+pub fn parse(input: Tokenstack) -> PRes<Type> {
     if let Ok((s, a)) = parse_fn(input) {
         Ok((s, a))
     } else if let Ok((s, a)) = parse_plain(input) {

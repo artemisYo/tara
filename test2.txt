@@ -25,9 +25,14 @@ type BTree[T: Ord] {
 	case Leaf,
 }
 
+// Function.Plain <- "fn" Ident GenericArgs FunctionArgs (":" Type)? CodeBlock
+// Function.Method <- "fn" Ident GenericArgs "on" Type FunctionArgs (":" Type)? CodeBlock
+// Function.Associated <- "fn" Ident GenericArgs "for" Type FunctionArgs (":" Type)? CodeBlock
+// FunctionArgs <- "(" (Ident ":" Type ",")* (Ident ":" Type)? ")"
+// Call <- "(" (Executable ",")* Executable? ")"
 fn insert[T: Ord] on *mut BTree[T](value: T) match this {
 	case BTree.Node(v, l, g) {
-		if value |> Ord.lt(v) {
+		if value.lt(v) {
 			l.insert(value);
 		}
 		else {
@@ -47,6 +52,8 @@ type Maybe[T] {
 	case None,
 }
 
+// MatchStatement <- "match" Expression "{" MatchCase* "}"
+// MatchCase <- "case" Literal CodeBlock
 fn none?[T] on Maybe[T](): bool match this {
 	case Some(_) { false }
 	case None { true }
@@ -70,7 +77,13 @@ type Vec[T] {
 	capacity: mut uint,
 	readable length: mut uint,
 }
-
+// CodeBlock <- PlainBlock | MatchStatement | IfStatement | ForStatement
+// PlainBlock <- "{" (Expression ";" | CodeBlock)* (Expression)? "}"
+// IfStatement <- "if" Executable CodeBlock ("else" CodeBlock)?
+// Assignment <- "=" Executable
+// IndexAccess <- "[" Executable "]"
+// FieldAccess <- "." Ident
+// Deref <- "*" Executable
 fn push[T] on Vec[T](element: T) {
 	if this.capacity <= vec.length {
 		this.capacity *= 1.2;
@@ -91,8 +104,11 @@ fn main(args: *[str]) {
 	println(fib(5));
 }
 
+// ForStatement <- "for" Ident "in" Executable CodeBlock
+// VariableDeclaration.mutable <- "mut" Ident (":" Type)? "=" Executable
+// VariableDeclaration.immutable <- "let" Ident (":" Type)? "=" Executable
 fn fib(count: int): Vec[int] {
-	mut acc: Vec[int] = Vec.new(),
+	mut acc: Vec[int] = Vec.new();
 	acc.push(1);
 	acc.push(1);
 	for _ in 2..=count {
