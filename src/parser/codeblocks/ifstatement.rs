@@ -1,0 +1,40 @@
+// IfStatement <- "if" Executable CodeBlock ("else" CodeBlock)?
+use crate::{
+    expect,
+    parser::{
+        codeblocks,
+        executable::{self, Executable},
+        PRes,
+    },
+    tokenizer::{Token, Tokenstack},
+};
+
+use super::CodeBlock;
+
+#[derive(Debug)]
+pub struct IfStatement {
+    cond: Box<dyn Executable>,
+    smash: Box<dyn CodeBlock>,
+    pass: Option<Box<dyn CodeBlock>>,
+}
+impl CodeBlock for IfStatement {}
+impl Executable for IfStatement {
+    fn as_executable(self: Box<Self>) -> Box<dyn Executable> {
+        self
+    }
+}
+pub fn parse(mut input: Tokenstack) -> PRes<impl CodeBlock> {
+    expect!(input, Token::IfKey);
+    let (s, cond) = executable::parse(input)?;
+    input = s;
+    let (s, smash) = codeblocks::parse(input)?;
+    input = s;
+    let pass: Option<Box<dyn CodeBlock>> = if input.pop_if(Token::ElseKey).is_some() {
+        let (s, b) = codeblocks::parse(input)?;
+        input = s;
+        Some(b)
+    } else {
+        None
+    };
+    Ok((input, IfStatement { cond, smash, pass }))
+}

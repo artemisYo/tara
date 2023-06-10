@@ -1,0 +1,44 @@
+proto Ord on T {
+	lt: fn(T, T): bool,
+	gt: fn(T, T): bool,
+	eq: fn(T, T): bool,
+}
+
+type Maybe[T] {
+	case Some(T),
+	case None,
+}
+
+type Vec[E] {
+	chunk: *mut [E],
+	cap: uint,
+	readable len: uint,
+}
+proto MutCollection[E] on T {
+	iterate: fn(T): Iter[E],
+	push: fn(*mut T, E),
+}
+
+// Implement <- "impl" Ident GenericArgs "on" Type ImplementBody
+// ImplementBody <- "{" (Ident "=" FnPath ",")* (Ident "=" FnPath)? "}"
+// FnPath <- (Ident ".")* Ident
+impl MutCollection[E] on Vec[E] {
+	iterate = Null,
+	push = Vec.push,
+}
+// Range <- ".." "="? Executable
+// PlusAndMinus <- ("+" | "-") Executable
+fn fib(count: int): Vec[int] {
+	mut acc: Vec[int] = Vec.new();
+	acc.push(1);
+	acc.push(1);
+	for _ in 2..=count {
+		let a = acc[acc.length - 1];
+		let b = acc[acc.length - 2];
+		acc.push(a + b);
+	}
+	acc
+}
+fn push[E] on *mut Vec[E](element: E) {
+	todo()
+}
