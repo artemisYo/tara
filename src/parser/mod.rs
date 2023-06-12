@@ -6,6 +6,7 @@ mod expressions;
 mod func;
 mod generics;
 mod implements;
+mod patterns;
 mod postexecutable;
 mod protocol;
 mod root;

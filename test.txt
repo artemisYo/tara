@@ -40,5 +40,10 @@ fn fib(count: int): Vec[int] {
 	acc
 }
 fn push[E] on *mut Vec[E](element: E) {
-	todo()
+	if this.capacity <= vec.length {
+		this.capacity *= 1.2;
+		this.chunk = this.chunk.resize(this.capacity);
+	}
+	this.chunk[vec.length] = element;
+	this.length++;
 }

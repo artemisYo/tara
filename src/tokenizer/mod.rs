@@ -29,6 +29,8 @@ pub enum Token {
     CloseBracket,  //<- ']'
     OpenCurly,     //<- "{"
     CloseCurly,    //<- "}"
+    OpenKeter,     //<- "<"
+    CloseKeter,    //<- ">"
     Accessor,      //<- '.' !whitespace
     Period,        //<- '.' &whitespace
     DPeriod,       //<- ".."
@@ -36,7 +38,9 @@ pub enum Token {
     SemiCol,       //<- ';'
     Colon,         //<- ':'
     Star,          //<- '*'
+    Ampersand,     //<- '&'
     Equals,        //<- '='
+    Slash,         //<- '/'
     FnKey,         //<- "fn" &whitespace
     ForKey,        //<- "for" &whitespace
     InKey,         //<- "in" &whitespace
@@ -70,6 +74,8 @@ impl Token {
             | Token::CloseBracket
             | Token::OpenCurly
             | Token::CloseCurly
+            | Token::OpenKeter
+            | Token::CloseKeter
             | Token::Period
             | Token::SemiCol
             | Token::Colon
@@ -77,7 +83,9 @@ impl Token {
             | Token::Comma
             | Token::Plus
             | Token::Minus
-            | Token::Equals => 1,
+            | Token::Equals
+            | Token::Ampersand
+            | Token::Slash => 1,
             Token::OnKey
             | Token::DPeriod
             | Token::Arrow
@@ -119,7 +127,11 @@ impl Token {
             ';' => Some(Token::SemiCol),
             ':' => Some(Token::Colon),
             '*' => Some(Token::Star),
+            '&' => Some(Token::Ampersand),
             '=' => Some(Token::Equals),
+            '/' => Some(Token::Slash),
+            '<' => Some(Token::OpenKeter),
+            '>' => Some(Token::CloseKeter),
             _ if string.starts_with_n_stuff("->", &[]) => Some(Token::Arrow),
             '-' => Some(Token::Minus),
             _ if string.starts_with_n_stuff("fn", &['(']) => Some(Token::FnKey),

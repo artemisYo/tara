@@ -2,6 +2,7 @@
 use crate::{
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         Error,
     },
     tokenizer::{Token, Tokenstack},
@@ -13,6 +14,11 @@ use super::{PERes, PostExecutable};
 pub struct IndexAccess {
     object: Box<dyn Executable>,
     index: Box<dyn Executable>,
+}
+impl Pattern for IndexAccess {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl PostExecutable for IndexAccess {}
 impl Executable for IndexAccess {

@@ -1,5 +1,5 @@
 // MatchStatement <- "match" Expression "{" MatchCase* "}"
-// MatchCase <- "case" Literal PlainBlock
+// MatchCase <- "case" Pattern PlainBlock
 use crate::{
     expect,
     parser::{
@@ -10,6 +10,7 @@ use crate::{
             literals::{self, Literal},
             Expression,
         },
+        patterns::{self, Pattern},
         PRes,
     },
     tokenizer::{Token, Tokenstack},
@@ -22,9 +23,14 @@ pub struct MatchStatement {
     source: Box<dyn Expression>,
     patterns: Vec<MatchCase>,
 }
+impl Pattern for MatchStatement {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
+}
 #[derive(Debug)]
 pub struct MatchCase {
-    pattern: Box<dyn Literal>,
+    pattern: Box<dyn Pattern>,
     body: Box<dyn CodeBlock>,
 }
 impl Executable for MatchStatement {
@@ -53,7 +59,7 @@ pub fn parse(mut input: Tokenstack) -> PRes<MatchStatement> {
 }
 fn parse_match_case(mut input: Tokenstack) -> PRes<MatchCase> {
     expect!(input, Token::CaseKey);
-    let (s, pattern) = literals::parse(input)?;
+    let (s, pattern) = patterns::parse(input)?;
     input = s;
     let (s, body) = plainblock::parse(input)?;
     let body = Box::new(body);

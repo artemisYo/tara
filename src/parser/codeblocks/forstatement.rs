@@ -4,6 +4,7 @@ use crate::{
     parser::{
         codeblocks,
         executable::{self, Executable},
+        patterns::Pattern,
         Error, PRes,
     },
     tokenizer::{Token, Tokenstack},
@@ -16,6 +17,11 @@ pub struct ForStatement {
     name: Token,
     source: Box<dyn Executable>,
     body: Box<dyn CodeBlock>,
+}
+impl Pattern for ForStatement {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl CodeBlock for ForStatement {}
 impl Executable for ForStatement {

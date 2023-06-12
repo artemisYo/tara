@@ -4,6 +4,7 @@ use crate::{
     expect,
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         types::{self, Type},
         Error, PRes,
     },
@@ -20,6 +21,11 @@ pub struct VariableDeclaration {
     is_mutable: bool,
 }
 
+impl Pattern for VariableDeclaration {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
+}
 impl Expression for VariableDeclaration {
     fn as_expression(self: Box<Self>) -> Box<dyn Expression> {
         self

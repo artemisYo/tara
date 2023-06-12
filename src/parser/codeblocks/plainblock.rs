@@ -3,6 +3,7 @@ use crate::{
     expect,
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         postexecutable, PRes,
     },
     tokenizer::{Token, Tokenstack},
@@ -14,6 +15,11 @@ use super::CodeBlock;
 pub struct PlainBlock {
     is_implicit: bool,
     body: Vec<Box<dyn Executable>>,
+}
+impl Pattern for PlainBlock {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl CodeBlock for PlainBlock {}
 impl Executable for PlainBlock {

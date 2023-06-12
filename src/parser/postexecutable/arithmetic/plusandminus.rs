@@ -2,6 +2,7 @@
 use crate::{
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         postexecutable::{PERes, PostExecutable},
         Error,
     },
@@ -15,6 +16,11 @@ pub struct PlusAndMinus {
     a: Box<dyn Executable>,
     b: Box<dyn Executable>,
     is_plus: bool,
+}
+impl Pattern for PlusAndMinus {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl Arithmetic for PlusAndMinus {}
 impl PostExecutable for PlusAndMinus {}

@@ -2,6 +2,7 @@
 use crate::{
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         Error,
     },
     tokenizer::{Token, Tokenstack},
@@ -13,6 +14,11 @@ use super::{PERes, PostExecutable};
 pub struct Assignment {
     destination: Box<dyn Executable>,
     source: Box<dyn Executable>,
+}
+impl Pattern for Assignment {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl PostExecutable for Assignment {}
 impl Executable for Assignment {

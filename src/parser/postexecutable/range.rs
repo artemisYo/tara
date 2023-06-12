@@ -2,6 +2,7 @@
 use crate::{
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         Error,
     },
     tokenizer::{Token, Tokenstack},
@@ -14,6 +15,11 @@ pub struct Range {
     start: Box<dyn Executable>,
     end: Box<dyn Executable>,
     is_inclusive: bool,
+}
+impl Pattern for Range {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl PostExecutable for Range {}
 impl Executable for Range {

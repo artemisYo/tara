@@ -2,6 +2,7 @@
 use crate::{
     parser::{
         executable::{self, Executable},
+        patterns::Pattern,
         Error,
     },
     tokenizer::{Token, Tokenstack},
@@ -13,6 +14,11 @@ use super::{PERes, PostExecutable};
 pub struct Call {
     args: Vec<Box<dyn Executable>>,
     path: Box<dyn Executable>,
+}
+impl Pattern for Call {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl PostExecutable for Call {}
 impl Executable for Call {

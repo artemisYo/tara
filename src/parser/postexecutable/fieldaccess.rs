@@ -1,6 +1,6 @@
 // FieldAccess <- "." Ident
 use crate::{
-    parser::{executable::Executable, Error},
+    parser::{executable::Executable, patterns::Pattern, Error},
     tokenizer::{Token, Tokenstack},
 };
 
@@ -10,6 +10,11 @@ use super::{PERes, PostExecutable};
 pub struct FieldAccess {
     field: Token,
     object: Box<dyn Executable>,
+}
+impl Pattern for FieldAccess {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl PostExecutable for FieldAccess {}
 impl Executable for FieldAccess {

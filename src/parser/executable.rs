@@ -1,8 +1,8 @@
 use crate::tokenizer::Tokenstack;
 
-use super::{codeblocks, expressions, postexecutable, Error, PRes};
+use super::{codeblocks, expressions, patterns::Pattern, postexecutable, Error, PRes};
 
-pub trait Executable: std::fmt::Debug {
+pub trait Executable: std::fmt::Debug + Pattern {
     fn as_executable(self: Box<Self>) -> Box<dyn Executable>;
 }
 pub fn parse(input: Tokenstack) -> PRes<Box<dyn Executable>> {

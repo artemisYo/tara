@@ -30,6 +30,8 @@ type BTree[T: Ord] {
 // Function.Associated <- "fn" Ident GenericArgs "for" Type FunctionArgs (":" Type)? CodeBlock
 // FunctionArgs <- "(" (Ident ":" Type ",")* (Ident ":" Type)? ")"
 // Call <- "(" (Executable ",")* Executable? ")"
+// Deref <- "*" Executable
+// Ref <- "&" Executable
 fn insert[T: Ord] on *mut BTree[T](value: T) match this {
 	case BTree.Node(v, l, g) {
 		if value.lt(v) {
@@ -53,7 +55,7 @@ type Maybe[T] {
 }
 
 // MatchStatement <- "match" Expression "{" MatchCase* "}"
-// MatchCase <- "case" Literal CodeBlock
+// MatchCase <- "case" Pattern CodeBlock
 fn none?[T] on Maybe[T](): bool match this {
 	case Some(_) { false }
 	case None { true }
@@ -83,7 +85,6 @@ type Vec[T] {
 // Assignment <- "=" Executable
 // IndexAccess <- "[" Executable "]"
 // FieldAccess <- "." Ident
-// Deref <- "*" Executable
 fn push[T] on Vec[T](element: T) {
 	if this.capacity <= vec.length {
 		this.capacity *= 1.2;

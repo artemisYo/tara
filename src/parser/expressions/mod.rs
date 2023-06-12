@@ -2,9 +2,9 @@ use crate::{choose_first, tokenizer::Tokenstack};
 
 use super::{executable::Executable, Error, PRes};
 
-mod deref;
 mod ident;
 pub mod literals;
+mod references;
 mod vardeclaration;
 
 pub trait Expression: std::fmt::Debug + Executable {
@@ -17,7 +17,7 @@ pub fn parse(mut input: Tokenstack) -> PRes<Box<dyn Expression>> {
         Ok((s, Box::new(a)))
     } else if let Ok((s, a)) = vardeclaration::parse(input) {
         Ok((s, Box::new(a)))
-    } else if let Ok((s, a)) = deref::parse(input) {
+    } else if let Ok((s, a)) = references::deref::parse(input) {
         Ok((s, Box::new(a)))
     } else {
         Err(Error::Empty)

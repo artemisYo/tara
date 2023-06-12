@@ -4,6 +4,7 @@ use crate::{
     parser::{
         codeblocks,
         executable::{self, Executable},
+        patterns::Pattern,
         PRes,
     },
     tokenizer::{Token, Tokenstack},
@@ -16,6 +17,11 @@ pub struct IfStatement {
     cond: Box<dyn Executable>,
     smash: Box<dyn CodeBlock>,
     pass: Option<Box<dyn CodeBlock>>,
+}
+impl Pattern for IfStatement {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
 }
 impl CodeBlock for IfStatement {}
 impl Executable for IfStatement {

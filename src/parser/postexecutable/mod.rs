@@ -7,13 +7,40 @@ type PERes<'a, T> = Result<(Tokenstack<'a>, T), (Box<dyn Executable>, Error<'a>)
 pub mod arithmetic;
 mod assignment;
 mod call;
+mod cmp;
 mod fieldaccess;
 mod indexaccess;
+mod opassign;
+mod quickinc;
 mod range;
 
 pub trait PostExecutable: Executable + std::fmt::Debug {}
 
 pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn Executable>> {
+    match quickinc::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, _)) => {
+            exec = ex;
+        }
+    }
+    match cmp::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, _)) => {
+            exec = ex;
+        }
+    }
+    match opassign::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, _)) => {
+            exec = ex;
+        }
+    }
     match arithmetic::parse(input, exec) {
         Ok((s, a)) => {
             return Ok((s, a.as_executable()));

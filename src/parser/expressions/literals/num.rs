@@ -1,5 +1,5 @@
 use crate::{
-    parser::{executable::Executable, expressions::Expression, Error, PRes},
+    parser::{executable::Executable, expressions::Expression, patterns::Pattern, Error, PRes},
     tokenizer::{Token, Tokenstack},
 };
 
@@ -7,6 +7,11 @@ use super::Literal;
 
 #[derive(Debug)]
 pub struct Num(Token);
+impl Pattern for Num {
+    fn as_pattern(self: Box<Self>) -> Box<dyn Pattern> {
+        self
+    }
+}
 impl Literal for Num {}
 impl Expression for Num {
     fn as_expression(self: Box<Self>) -> Box<dyn Expression> {
