@@ -1,1 +1,2 @@
-Add "*=" and ">=" and stuff as well as "++"
+Deal with `*this = something` being parsed as `*(this = something)` and not `(*this) = something`
+Add error handling so debugging becomes easier

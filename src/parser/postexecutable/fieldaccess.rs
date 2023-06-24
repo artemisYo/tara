@@ -22,14 +22,15 @@ impl Executable for FieldAccess {
         self
     }
 }
+
 pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<FieldAccess> {
     if input.pop_if(Token::Accessor).is_none() {
-        return Err((exec, Error::Empty));
+        return Err((exec, Error::Expected { expected: Token::Accessor, origin: input }));
     }
     let field = match input.pop_if(Token::is_ident) {
         Some(n) => n,
         None => {
-            return Err((exec, Error::Empty));
+            return Err((exec, Error::Expected { expected: Token::Ident("".to_owned()), origin: input }));
         }
     };
     Ok((

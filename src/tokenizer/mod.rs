@@ -233,6 +233,9 @@ where
 #[derive(Clone, Copy)]
 pub struct Tokenstack<'a>(&'a [Token], usize);
 impl<'a> Tokenstack<'a> {
+    pub fn lookahead(&self, x: usize) -> &Token {
+        &self.0[self.1 + x]
+    }
     pub fn peek(&self) -> &Token {
         &self.0[self.1]
     }

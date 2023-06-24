@@ -27,6 +27,8 @@ impl Executable for PlainBlock {
         self
     }
 }
+
+//const NAME: &'static str = "PlainBlock";
 pub fn parse(mut input: Tokenstack) -> PRes<PlainBlock> {
     let mut last_block = false;
     let mut is_implicit = false;

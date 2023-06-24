@@ -6,7 +6,7 @@ use crate::{
         executable::{self, Executable},
         patterns::Pattern,
         types::{self, Type},
-        Error, PRes,
+        Error, PRes, Traceable,
     },
     tokenizer::{Token, Tokenstack},
 };
@@ -36,23 +36,23 @@ impl Executable for VariableDeclaration {
         self
     }
 }
-
+const NAME: &'static str = "VariableDeclaration";
 pub fn parse(mut input: Tokenstack) -> PRes<VariableDeclaration> {
     let is_mutable = match input.pop() {
         Token::MutKey => true,
         Token::LetKey => false,
-        _ => Err(Error::Empty)?,
+        _ => Err(Error::Multiple { possible: &[Token::MutKey, Token::LetKey], origin: input })?,
     };
-    let name = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
+    let name = input.pop_if(Token::is_ident).ok_or_else(|| Error::Expected { expected: Token::Ident("".to_owned()), origin: input })?;
     let ty = if input.pop_if(Token::Colon).is_some() {
-        let (s, t) = types::parse(input)?;
+        let (s, t) = types::parse(input).trace(NAME)?;
         input = s;
         Some(Box::new(t))
     } else {
         None
     };
     expect!(input, Token::Equals);
-    let (s, source) = executable::parse(input)?;
+    let (s, source) = executable::parse(input).trace(NAME)?;
     input = s;
     Ok((
         input,

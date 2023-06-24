@@ -5,7 +5,7 @@ use crate::{
         codeblocks,
         executable::{self, Executable},
         patterns::Pattern,
-        PRes,
+        PRes, Traceable,
     },
     tokenizer::{Token, Tokenstack},
 };
@@ -29,14 +29,16 @@ impl Executable for IfStatement {
         self
     }
 }
+
+const NAME: &'static str = "IfStatement";
 pub fn parse(mut input: Tokenstack) -> PRes<impl CodeBlock> {
     expect!(input, Token::IfKey);
-    let (s, cond) = executable::parse(input)?;
+    let (s, cond) = executable::parse(input).trace(NAME)?;
     input = s;
-    let (s, smash) = codeblocks::parse(input)?;
+    let (s, smash) = codeblocks::parse(input).trace(NAME)?;
     input = s;
     let pass: Option<Box<dyn CodeBlock>> = if input.pop_if(Token::ElseKey).is_some() {
-        let (s, b) = codeblocks::parse(input)?;
+        let (s, b) = codeblocks::parse(input).trace(NAME)?;
         input = s;
         Some(b)
     } else {

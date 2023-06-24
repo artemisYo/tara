@@ -30,6 +30,7 @@ impl Executable for PlusAndMinus {
     }
 }
 
+const NAME: &'static str = "PlusAndMinus";
 pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<PlusAndMinus> {
     let is_plus = match input.peek() {
         Token::Plus => {
@@ -41,7 +42,7 @@ pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<PlusAndM
             false
         }
         _ => {
-            return Err((exec, Error::Empty));
+            return Err((exec, Error::Multiple { possible: &[Token::Plus, Token::Minus], origin: input }));
         }
     };
     let b = match executable::parse(input) {
@@ -49,8 +50,8 @@ pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<PlusAndM
             input = s;
             b
         }
-        Err(_) => {
-            return Err((exec, Error::Empty));
+        Err(e) => {
+            return Err((exec, e.trace(NAME)));
         }
     };
     Ok((

@@ -7,7 +7,7 @@ pub mod deref {
         parser::{
             executable::{self, Executable},
             patterns::Pattern,
-            PRes,
+            PRes, Traceable,
         },
         tokenizer::{Token, Tokenstack},
     };
@@ -31,10 +31,10 @@ pub mod deref {
             self
         }
     }
-
+    const NAME: &'static str = "Deref";
     pub fn parse(mut input: Tokenstack) -> PRes<Deref> {
         expect!(input, Token::Star);
-        let (s, o) = executable::parse(input)?;
+        let (s, o) = executable::parse(input).trace(NAME)?;
         input = s;
         Ok((input, Deref(o)))
     }
@@ -45,7 +45,7 @@ pub mod refer {
         parser::{
             executable::{self, Executable},
             patterns::Pattern,
-            PRes,
+            PRes, Traceable,
         },
         tokenizer::{Token, Tokenstack},
     };
@@ -69,10 +69,10 @@ pub mod refer {
             self
         }
     }
-
+    const NAME: &'static str = "Refer";
     pub fn parse(mut input: Tokenstack) -> PRes<Refer> {
         expect!(input, Token::Ampersand);
-        let (s, o) = executable::parse(input)?;
+        let (s, o) = executable::parse(input).trace(NAME)?;
         input = s;
         Ok((input, Refer(o)))
     }

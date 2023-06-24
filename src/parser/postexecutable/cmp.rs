@@ -37,23 +37,24 @@ impl Pattern for Comparison {
     }
 }
 
+const NAME: &'static str = "Comparison";
 pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<Comparison> {
     let mut op = match input.peek() {
         Token::OpenKeter => Operation::LessThan,
         Token::CloseKeter => Operation::MoreThan,
         Token::Equals => Operation::Equal,
-        _ => return Err((exec, Error::Empty)),
+        _ => return Err((exec, Error::Multiple { possible: &[Token::OpenKeter, Token::CloseKeter, Token::Equals], origin: input })),
     };
     input.pop();
     op = match (&op, input.peek()) {
-        (Operation::Equal, Token::Equals) => Operation::Equal,
-        (Operation::LessThan, Token::Equals) => Operation::LessEq,
-        (Operation::MoreThan, Token::Equals) => Operation::MoreEq,
+        (Operation::Equal, Token::Equals) => {input.pop(); Operation::Equal},
+        (Operation::LessThan, Token::Equals) => {input.pop(); Operation::LessEq},
+        (Operation::MoreThan, Token::Equals) => {input.pop(); Operation::MoreEq},
         _ => op,
     };
     let (s, right) = match executable::parse(input) {
         Ok((s, a)) => (s, a),
-        Err(_) => return Err((exec, Error::Empty)),
+        Err(e) => return Err((exec, e.trace(NAME))),
     };
     input = s;
     Ok((

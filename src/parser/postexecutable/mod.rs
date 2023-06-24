@@ -16,44 +16,15 @@ mod range;
 
 pub trait PostExecutable: Executable + std::fmt::Debug {}
 
+const NAME: &'static str = "PostExecutable";
 pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn Executable>> {
+    let mut errors = vec![];
     match quickinc::parse(input, exec) {
         Ok((s, a)) => {
             return Ok((s, Box::new(a)));
         }
-        Err((ex, _)) => {
-            exec = ex;
-        }
-    }
-    match cmp::parse(input, exec) {
-        Ok((s, a)) => {
-            return Ok((s, Box::new(a)));
-        }
-        Err((ex, _)) => {
-            exec = ex;
-        }
-    }
-    match opassign::parse(input, exec) {
-        Ok((s, a)) => {
-            return Ok((s, Box::new(a)));
-        }
-        Err((ex, _)) => {
-            exec = ex;
-        }
-    }
-    match arithmetic::parse(input, exec) {
-        Ok((s, a)) => {
-            return Ok((s, a.as_executable()));
-        }
-        Err((ex, _)) => {
-            exec = ex;
-        }
-    }
-    match call::parse(input, exec) {
-        Ok((s, a)) => {
-            return Ok((s, Box::new(a)));
-        }
-        Err((ex, _)) => {
+        Err((ex, e)) => {
+            errors.push(e);
             exec = ex;
         }
     }
@@ -61,7 +32,44 @@ pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn 
         Ok((s, a)) => {
             return Ok((s, Box::new(a)));
         }
-        Err((ex, _)) => {
+        Err((ex, e)) => {
+            errors.push(e);
+            exec = ex;
+        }
+    }
+    match cmp::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, e)) => {
+            errors.push(e);
+            exec = ex;
+        }
+    }
+    match opassign::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, e)) => {
+            errors.push(e);
+            exec = ex;
+        }
+    }
+    match arithmetic::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, a.as_executable()));
+        }
+        Err((ex, e)) => {
+            errors.push(e);
+            exec = ex;
+        }
+    }
+    match call::parse(input, exec) {
+        Ok((s, a)) => {
+            return Ok((s, Box::new(a)));
+        }
+        Err((ex, e)) => {
+            errors.push(e);
             exec = ex;
         }
     }
@@ -69,7 +77,8 @@ pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn 
         Ok((s, a)) => {
             return Ok((s, Box::new(a)));
         }
-        Err((ex, _)) => {
+        Err((ex, e)) => {
+            errors.push(e);
             exec = ex;
         }
     }
@@ -77,7 +86,8 @@ pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn 
         Ok((s, a)) => {
             return Ok((s, Box::new(a)));
         }
-        Err((ex, _)) => {
+        Err((ex, e)) => {
+            errors.push(e);
             exec = ex;
         }
     }
@@ -85,9 +95,10 @@ pub fn parse(input: Tokenstack, mut exec: Box<dyn Executable>) -> PERes<Box<dyn 
         Ok((s, a)) => {
             return Ok((s, Box::new(a)));
         }
-        Err((ex, _)) => {
+        Err((ex, e)) => {
+            errors.push(e);
             exec = ex;
         }
     }
-    Err((exec, Error::Empty))
+    Err((exec, Error::Choice { errors }.trace(NAME)))
 }

@@ -43,9 +43,9 @@ fn insert[T: Ord] on *mut BTree[T](value: T) match this {
 	}
 	case BTree.Leaf {
 		*this = 
-			BTree.Node{value = value,
+			BTree.Node(value = value,
 				less = &BTree.Leaf,
-				more = &BTree.Leaf};
+				more = &BTree.Leaf);
 	}
 }
 
@@ -96,7 +96,7 @@ fn push[T] on Vec[T](element: T) {
 
 fn new[T] for Vec[T](): Vec[T] {
 	let chunk = Array.with_capacity(10);
-	Vec(chunk=chunk, capacity=10, length=0)
+	Vec(chunk = chunk, capacity = 10, length = 0)
 }
 
 // Type.Fn <- "fn" GenericsSupplied "(" (Type ",")* Type? ")" (":" Type)?

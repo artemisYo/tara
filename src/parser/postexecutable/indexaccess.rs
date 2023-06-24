@@ -26,21 +26,23 @@ impl Executable for IndexAccess {
         self
     }
 }
+
+const NAME: &'static str = "IndexAccess";
 pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<IndexAccess> {
     if input.pop_if(Token::OpenBracket).is_none() {
-        return Err((exec, Error::Empty));
+        return Err((exec, Error::Expected { expected: Token::OpenBracket, origin: input }));
     }
     let index = match executable::parse(input) {
         Ok((s, a)) => {
             input = s;
             a
         }
-        Err(_) => {
-            return Err((exec, Error::Empty));
+        Err(e) => {
+            return Err((exec, e.trace(NAME)));
         }
     };
     if input.pop_if(Token::CloseBracket).is_none() {
-        return Err((exec, Error::Empty));
+        return Err((exec, Error::Expected { expected: Token::CloseBracket, origin: input }));
     }
     Ok((
         input,

@@ -25,6 +25,6 @@ impl Executable for Num {
 }
 
 pub fn parse(mut input: Tokenstack) -> PRes<Num> {
-    let n = input.pop_if(Token::is_num).ok_or(Error::Empty)?;
+    let n = input.pop_if(Token::is_num).ok_or_else(|| Error::Expected { expected: Token::Num("".to_owned()), origin: input })?;
     Ok((input, Num(n)))
 }

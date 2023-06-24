@@ -30,10 +30,11 @@ pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<QuickInc
         _ => return Err((exec, Error::Empty)),
     };
     input.pop();
-    if !(op && input.pop_if(Token::Plus).is_some()) {
-        return Err((exec, Error::Empty));
-    } else if !(!op && input.pop_if(Token::Minus).is_some()) {
-        return Err((exec, Error::Empty));
+    if op && input.pop_if(Token::Plus).is_some() {
+        return Ok((input, QuickIncrement { object: exec, op }));
     }
-    Ok((input, QuickIncrement { object: exec, op }))
+    if !op && input.pop_if(Token::Minus).is_some() {
+        return Ok((input, QuickIncrement { object: exec, op }));
+    }
+    Err((exec, Error::Empty))
 }

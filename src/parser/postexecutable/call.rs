@@ -1,4 +1,4 @@
-// Call <- "(" (Executable ",")* Executable? ")"
+// Call <- "(" ((Ident "=")? Executable ",")* ((Ident "=")? Executable)? ")"
 use crate::{
     parser::{
         executable::{self, Executable},
@@ -12,7 +12,7 @@ use super::{PERes, PostExecutable};
 
 #[derive(Debug)]
 pub struct Call {
-    args: Vec<Box<dyn Executable>>,
+    args: Vec<(Option<Token>, Box<dyn Executable>)>,
     path: Box<dyn Executable>,
 }
 impl Pattern for Call {
@@ -27,9 +27,10 @@ impl Executable for Call {
     }
 }
 
+const NAME: &'static str = "Call";
 pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<Call> {
     if input.pop_if(Token::OpenParen).is_none() {
-        return Err((exec, Error::Empty));
+        return Err((exec, Error::Expected { expected: Token::OpenParen, origin: input }));
     }
     let mut args = vec![];
     // runs any amount of times
@@ -37,20 +38,33 @@ pub fn parse(mut input: Tokenstack, exec: Box<dyn Executable>) -> PERes<Call> {
         if input.next_is(Token::CloseParen) {
             break;
         }
+        let n = if input.lookahead(1) == &Token::Equals {
+            match input.pop_if(Token::is_ident) {
+                Some(n) => {
+                    input.pop();
+                    Some(n)
+                }
+                None => {
+                    return Err((exec, Error::Expected { expected: Token::Equals, origin: input }));
+                }
+            }
+        } else {
+            None
+        };
         let (s, a) = match executable::parse(input) {
             Ok((s, a)) => (s, a),
-            Err(_) => {
-                return Err((exec, Error::Empty));
+            Err(e) => {
+                return Err((exec, e.trace(NAME)));
             }
         };
-        args.push(a);
+        args.push((n, a));
         input = s;
         if input.pop_if(Token::Comma).is_none() || input.next_is(Token::CloseParen) {
             break;
         }
     }
     if input.pop_if(Token::CloseParen).is_none() {
-        return Err((exec, Error::Empty));
+        return Err((exec, Error::Expected { expected: Token::CloseParen, origin: input }));
     }
     Ok((input, Call { args, path: exec }))
 }

@@ -11,7 +11,7 @@ use crate::{
             Expression,
         },
         patterns::{self, Pattern},
-        PRes,
+        PRes, Traceable,
     },
     tokenizer::{Token, Tokenstack},
 };
@@ -39,9 +39,10 @@ impl Executable for MatchStatement {
     }
 }
 impl CodeBlock for MatchStatement {}
+const NAME: &'static str = "MatchStatement";
 pub fn parse(mut input: Tokenstack) -> PRes<MatchStatement> {
     expect!(input, Token::MatchKey);
-    let (s, source) = expressions::parse(input)?;
+    let (s, source) = expressions::parse(input).trace(NAME)?;
     input = s;
     expect!(input, Token::OpenCurly);
     let mut patterns = vec![];
@@ -50,7 +51,7 @@ pub fn parse(mut input: Tokenstack) -> PRes<MatchStatement> {
         if input.next_is(Token::CloseCurly) {
             break;
         }
-        let (s, p) = parse_match_case(input)?;
+        let (s, p) = parse_match_case(input).trace(NAME)?;
         patterns.push(p);
         input = s;
     }
@@ -59,9 +60,9 @@ pub fn parse(mut input: Tokenstack) -> PRes<MatchStatement> {
 }
 fn parse_match_case(mut input: Tokenstack) -> PRes<MatchCase> {
     expect!(input, Token::CaseKey);
-    let (s, pattern) = patterns::parse(input)?;
+    let (s, pattern) = patterns::parse(input).trace(NAME)?;
     input = s;
-    let (s, body) = plainblock::parse(input)?;
+    let (s, body) = plainblock::parse(input).trace(NAME)?;
     let body = Box::new(body);
     input = s;
     Ok((input, MatchCase { pattern, body }))

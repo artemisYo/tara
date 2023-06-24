@@ -24,6 +24,6 @@ impl Executable for Ident {
 }
 
 pub fn parse(mut input: Tokenstack) -> PRes<Ident> {
-    let n = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
+    let n = input.pop_if(Token::is_ident).ok_or_else(|| Error::Expected { expected: Token::Ident("".to_owned()), origin: input })?;
     Ok((input, Ident(n)))
 }

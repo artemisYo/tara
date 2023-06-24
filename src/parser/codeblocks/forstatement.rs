@@ -1,13 +1,12 @@
 // ForStatement <- "for" Ident "in" Executable CodeBlock
 use crate::{
-    expect,
     parser::{
         codeblocks,
         executable::{self, Executable},
         patterns::Pattern,
-        Error, PRes,
+        Error, PRes, Traceable,
     },
-    tokenizer::{Token, Tokenstack},
+    tokenizer::{Token, Tokenstack}, expect,
 };
 
 use super::CodeBlock;
@@ -29,13 +28,16 @@ impl Executable for ForStatement {
         self
     }
 }
+const NAME: &'static str = "ForStatement";
 pub fn parse(mut input: Tokenstack) -> PRes<ForStatement> {
+    //input.pop_if(Token::ForKey).ok_or_else(|| Error::Expected { expected: Token::ForKey, found: input.pop(), origin: input })?;
     expect!(input, Token::ForKey);
     let name = input.pop_if(Token::is_ident).ok_or(Error::Empty)?;
+    //input.pop_if(Token::InKey).ok_or_else(|| Error::Expected { expected: Token::InKey, found: input.pop(), origin: input })?;
     expect!(input, Token::InKey);
-    let (s, source) = executable::parse(input)?;
+    let (s, source) = executable::parse(input).trace(NAME)?;
     input = s;
-    let (s, body) = codeblocks::parse(input)?;
+    let (s, body) = codeblocks::parse(input).trace(NAME)?;
     input = s;
     Ok((input, ForStatement { name, source, body }))
 }
