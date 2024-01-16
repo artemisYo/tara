@@ -1,7 +1,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token<'a> {
     // Keywords
+    Let,
     // Operators
+	Semicolon,
     Plus,
     Minus,
     Star,
@@ -37,6 +39,11 @@ impl<'a> TokenIter<'a> {
         }
         None
     }
+    pub fn expect_done(&self) {
+		if self.0.len() > 0 {
+			panic!("Expected iterator to be done!\n{:?}", self.0);
+		}
+    }
 }
 impl<'a> std::iter::Iterator for TokenIter<'a> {
     type Item = Token<'a>;
@@ -55,6 +62,7 @@ pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, &'a str> {
         const TOKS: &[Tokenizer] = &[
             lex_operator,
             lex_number,
+            lex_keyword,
             lex_name,
         ];
         let (rest, t) = TOKS.iter()
@@ -77,6 +85,7 @@ const OPERATORS: &[(&str, Token)] = {
     , ("-", Minus)
     , ("/", Slash)
     , ("=", Equals)
+    , (";", Semicolon)
     , ("(", OpenParen)
     , (")", CloseParen)
     ]
@@ -111,4 +120,16 @@ fn lex_name(input: &str) -> Option<(&str, Token)> {
     if len == 0 { return None; }
     let (name, rest) = input.split_at(len);
     Some((rest, Token::Name(name)))
+}
+
+fn lex_keyword(input: &str) -> Option<(&str, Token)> {
+    fn starts_delimited(string: &str) -> bool {
+		string.chars().nth(0).map(|c| c.is_whitespace() || starts_operator(c)).unwrap_or(true)
+    }
+	const KEYS: &[(&str, Token)] = &[
+		("let", Token::Let)
+    ];
+	KEYS.iter()
+    	.find(|(k, _)| input.starts_with(k) && starts_delimited(&input[k.len()..]))
+    	.map(|(k, t)| (&input[k.len()..], *t))
 }

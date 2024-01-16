@@ -1,8 +1,23 @@
 pub mod syntax;
 pub mod exec;
 
-pub type Root = Expr;
+pub type Root = File;
 
+#[derive(Debug)]
+pub struct File {
+	body: Vec<Statement>,
+	tail: Option<Expr>,
+}
+#[derive(Debug)]
+pub enum Statement {
+    Let(LetStmt),
+	Expr(Expr),
+}
+#[derive(Debug)]
+pub struct LetStmt {
+	name: String,
+	init: Expr,
+}
 #[derive(Debug)]
 pub enum Expr {
     Binary(BinExpr),
@@ -20,5 +35,6 @@ pub enum BinOp {
 }
 #[derive(Debug)]
 pub enum SinExpr {
-    Number(isize)
+    Number(isize),
+    Name(String),
 }

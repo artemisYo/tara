@@ -2,10 +2,57 @@ use crate::lexer::{Token, TokenIter};
 use super::*;
 
 pub fn parse<'a>(input: &'a [Token<'a>]) -> Option<Root> {
-    Expr::parse(TokenIter::new(input)).map(|(_, e)| e)
+    File::parse(TokenIter::new(input)).map(|(_, e)| e)
 }
 
 type Parser<T> = for <'a> fn(TokenIter<'a>) -> Option<(TokenIter<'a>, T)>;
+
+impl File {
+    // File::parse -> Statement* Expr? $
+	fn parse(mut input: TokenIter) -> Option<(TokenIter, Self)> {
+    	let mut body = vec![];
+    	while let Some((rest, stmt)) = Statement::parse(input) {
+        	body.push(stmt);
+			input = rest;
+    	}
+    	let tail = if let Some((rest, tail)) = Expr::parse(input) {
+        	input = rest;
+			Some(tail)
+    	} else {
+			None
+    	};
+    	input.expect_done();
+    	Some((input, Self {body, tail}))
+	}
+}
+
+impl Statement {
+	fn parse(input: TokenIter) -> Option<(TokenIter, Self)> {
+		const STMTS: &[Parser<Statement>] = &[
+			LetStmt::parse, Statement::parse_expr,
+    	];
+    	STMTS.iter().map(|f| f(input)).find(Option::is_some).flatten()
+	}
+	fn parse_expr(input: TokenIter) -> Option<(TokenIter, Self)> {
+		let (mut input, e) = Expr::parse(input)?;
+		input.consume(Token::Semicolon)?;
+		Some((input, Statement::Expr(e)))
+	}
+}
+
+impl LetStmt {
+    // LetStmt::parse -> "let" Token::Name "=" Expr ";"
+	fn parse(mut input: TokenIter) -> Option<(TokenIter, Statement)> {
+    	input.consume(Token::Let)?;
+    	let name = input.find_map(|t| if let Token::Name(n) = t {
+			Some(n.to_string())
+    	} else { None })?;
+    	input.consume(Token::Equals)?;
+    	let (mut input, init) = Expr::parse(input)?;
+    	input.consume(Token::Semicolon)?;
+    	Some((input, Statement::Let(LetStmt { name, init })))
+	}
+}
 
 impl Expr {
     // Expr::parse -> Expr::parse_level(0)
@@ -63,12 +110,12 @@ impl BinOp {
 }
 
 impl SinExpr {
-    // SinExpr::parse -> Token::Number
+    // SinExpr::parse -> Token::Number / Token::Name
     fn parse<'a>(mut input: TokenIter<'a>) -> Option<(TokenIter<'a>, Expr)> {
-        let e = input.find_map(|t| if let Token::Number(n) = t {
-            Some(Expr::Single(SinExpr::Number(n)))
-        } else {
-            None
+        let e = input.find_map(|t| match t {
+			Token::Number(n) => Some(Expr::Single(SinExpr::Number(n))),
+			Token::Name(n) => Some(Expr::Single(SinExpr::Name(n.to_string()))),
+    		_ => None
         })?;
         Some((input, e))
     }
