@@ -1,6 +1,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token<'a> {
     // Keywords
+    If,
+    Else,
+    While,
+    Then,
     Let,
     // Operators
 	Semicolon,
@@ -11,6 +15,8 @@ pub enum Token<'a> {
     Equals,
     OpenParen,
     CloseParen,
+    OpenCurly,
+    CloseCurly,
     // Literals
     Number(isize),
     Name(&'a str)
@@ -88,6 +94,8 @@ const OPERATORS: &[(&str, Token)] = {
     , (";", Semicolon)
     , ("(", OpenParen)
     , (")", CloseParen)
+    , ("{", OpenCurly)
+    , ("}", CloseCurly)
     ]
 };
 
@@ -127,7 +135,11 @@ fn lex_keyword(input: &str) -> Option<(&str, Token)> {
 		string.chars().nth(0).map(|c| c.is_whitespace() || starts_operator(c)).unwrap_or(true)
     }
 	const KEYS: &[(&str, Token)] = &[
-		("let", Token::Let)
+        ("if", Token::If),
+		("let", Token::Let),
+        ("then", Token::Then),
+        ("else", Token::Else),
+        ("while", Token::While),
     ];
 	KEYS.iter()
     	.find(|(k, _)| input.starts_with(k) && starts_delimited(&input[k.len()..]))

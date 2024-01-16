@@ -22,6 +22,20 @@ pub struct LetStmt {
 pub enum Expr {
     Binary(BinExpr),
     Single(SinExpr),
+    While(WhileExpr),
+    If(IfExpr),
+}
+#[derive(Debug)]
+pub struct IfExpr {
+    cond: Box<Expr>,
+    smash: Box<File>,
+    pass: Option<Box<File>>,
+}
+#[derive(Debug)]
+pub struct WhileExpr {
+    cond: Box<Expr>,
+    body: Box<File>,
+    then: Option<Box<File>>,
 }
 #[derive(Debug)]
 pub struct BinExpr {

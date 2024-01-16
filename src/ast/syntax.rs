@@ -8,7 +8,7 @@ pub fn parse<'a>(input: &'a [Token<'a>]) -> Option<Root> {
 type Parser<T> = for <'a> fn(TokenIter<'a>) -> Option<(TokenIter<'a>, T)>;
 
 impl File {
-    // File::parse -> Statement* Expr? $
+    // File::parse -> Statement* Expr?
 	fn parse(mut input: TokenIter) -> Option<(TokenIter, Self)> {
     	let mut body = vec![];
     	while let Some((rest, stmt)) = Statement::parse(input) {
@@ -21,7 +21,6 @@ impl File {
     	} else {
 			None
     	};
-    	input.expect_done();
     	Some((input, Self {body, tail}))
 	}
 }
@@ -62,7 +61,7 @@ impl Expr {
     // Expr::parse_level(p) -> EXPRS[p]
     fn parse_level<'a>(input: TokenIter<'a>, level: usize) -> Option<(TokenIter<'a>, Self)> {
         const EXPRS: &[&[Parser<Expr>]] = &[
-            &[BinExpr::parse::<0>],
+            &[WhileExpr::parse, IfExpr::parse, BinExpr::parse::<0>],
             &[BinExpr::parse::<1>],
             &[Expr::parse_parens, SinExpr::parse],
         ];
@@ -74,6 +73,58 @@ impl Expr {
         let (mut input, e) = Self::parse(input)?;
         input.consume(Token::CloseParen)?;
         Some((input, e))
+    }
+}
+
+impl IfExpr {
+    // IfExpr::parse -> "if" Expr IfExpr::block { "else" IfExpr::block }?
+    fn parse(mut input: TokenIter) -> Option<(TokenIter, Expr)> {
+        input.consume(Token::If)?;
+        dbg!("iffy");
+        let (input, cond) = Expr::parse(input)?;
+        let cond = Box::new(cond);
+        dbg!(&cond, &input);
+        let (mut input, smash) = IfExpr::block(input)?;
+        let smash = Box::new(smash);
+        dbg!(&smash);
+        let pass = if input.consume(Token::Else).is_some() {
+            let (rest, pass) = IfExpr::block(input)?;
+            dbg!(&pass);
+            input = rest;
+            Some(Box::new(pass))
+        } else {
+            dbg!("fuck");
+            None
+        };
+        Some((input, Expr::If(Self { cond, smash, pass })))
+    }
+    // IfExpr::block -> "{" File "}"
+    fn block(mut input: TokenIter) -> Option<(TokenIter, File)> {
+        dbg!("----");
+        input.consume(Token::OpenCurly)?;
+        let (mut input, f) = File::parse(input)?;
+        dbg!(&f);
+        input.consume(Token::CloseCurly)?;
+        Some((input, f))
+    }
+}
+
+impl WhileExpr {
+    // WhileExpr::parse -> "while" Expr IfExpr::block { "then" IfExpr::block }?
+    fn parse(mut input: TokenIter) -> Option<(TokenIter, Expr)> {
+        input.consume(Token::While)?;
+        let (input, cond) = Expr::parse(input)?;
+        let cond = Box::new(cond);
+        let (mut input, body) = IfExpr::block(input)?;
+        let body = Box::new(body);
+        let then = if input.consume(Token::Then).is_some() {
+            let (rest, then) = IfExpr::block(input)?;
+            input = rest;
+            Some(Box::new(then))
+        } else {
+            None
+        };
+        Some((input, Expr::While(Self { cond, body, then })))
     }
 }
 
