@@ -26,16 +26,18 @@ pub enum Expr {
     If(IfExpr),
 }
 #[derive(Debug)]
+pub struct Block(Box<File>);
+#[derive(Debug)]
 pub struct IfExpr {
     cond: Box<Expr>,
-    smash: Box<File>,
-    pass: Option<Box<File>>,
+    smash: Block,
+    pass: Option<Block>,
 }
 #[derive(Debug)]
 pub struct WhileExpr {
     cond: Box<Expr>,
-    body: Box<File>,
-    then: Option<Box<File>>,
+    body: Block,
+    then: Option<Block>,
 }
 #[derive(Debug)]
 pub struct BinExpr {

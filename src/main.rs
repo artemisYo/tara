@@ -1,3 +1,5 @@
+mod scoped_map;
+
 mod lexer;
 mod ast;
 use ast::{syntax, exec};

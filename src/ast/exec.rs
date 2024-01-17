@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use crate::scoped_map::*;
 
 use super::*;
 
@@ -7,11 +7,11 @@ pub fn run(ast: Root) -> isize {
 }
 
 struct Ctx<'a> {
-	decls: BTreeMap<&'a str, isize>,
+	decls: ScopeMap<&'a str, isize>,
 }
 impl<'a> Ctx<'a> {
 	fn new() -> Self {
-		Self { decls: BTreeMap::new() }
+		Self { decls: ScopeMap::new() }
 	}
 }
 
@@ -49,6 +49,15 @@ impl Expr {
     }
 }
 
+impl Block {
+	fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    	let scope = ctx.decls.scope();
+		let out = self.0.run(ctx);
+		ctx.decls.restore(scope);
+		out
+	}
+}
+
 impl IfExpr {
     fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
         let cond = self.cond.run(ctx);
@@ -84,7 +93,7 @@ impl SinExpr {
     fn run(&self, ctx: &mut Ctx) -> isize {
         match self {
             Self::Number(n) => *n,
-			Self::Name(n) => *ctx.decls.get(n.as_str()).expect("use of undeclared name!")
+			Self::Name(n) => *ctx.decls.get(&n.as_str()).expect("use of undeclared name!")
         }
     }
 }

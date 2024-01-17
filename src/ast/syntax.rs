@@ -76,36 +76,31 @@ impl Expr {
     }
 }
 
+impl Block {
+    // Block::parse -> "{" File "}"
+    fn parse(mut input: TokenIter) -> Option<(TokenIter, Self)> {
+        input.consume(Token::OpenCurly)?;
+        let (mut input, f) = File::parse(input)?;
+        input.consume(Token::CloseCurly)?;
+        Some((input, Self(Box::new(f))))
+    }
+}
+
 impl IfExpr {
     // IfExpr::parse -> "if" Expr IfExpr::block { "else" IfExpr::block }?
     fn parse(mut input: TokenIter) -> Option<(TokenIter, Expr)> {
         input.consume(Token::If)?;
-        dbg!("iffy");
         let (input, cond) = Expr::parse(input)?;
         let cond = Box::new(cond);
-        dbg!(&cond, &input);
-        let (mut input, smash) = IfExpr::block(input)?;
-        let smash = Box::new(smash);
-        dbg!(&smash);
+        let (mut input, smash) = Block::parse(input)?;
         let pass = if input.consume(Token::Else).is_some() {
-            let (rest, pass) = IfExpr::block(input)?;
-            dbg!(&pass);
+            let (rest, pass) = Block::parse(input)?;
             input = rest;
-            Some(Box::new(pass))
+            Some(pass)
         } else {
-            dbg!("fuck");
             None
         };
         Some((input, Expr::If(Self { cond, smash, pass })))
-    }
-    // IfExpr::block -> "{" File "}"
-    fn block(mut input: TokenIter) -> Option<(TokenIter, File)> {
-        dbg!("----");
-        input.consume(Token::OpenCurly)?;
-        let (mut input, f) = File::parse(input)?;
-        dbg!(&f);
-        input.consume(Token::CloseCurly)?;
-        Some((input, f))
     }
 }
 
@@ -115,12 +110,11 @@ impl WhileExpr {
         input.consume(Token::While)?;
         let (input, cond) = Expr::parse(input)?;
         let cond = Box::new(cond);
-        let (mut input, body) = IfExpr::block(input)?;
-        let body = Box::new(body);
+        let (mut input, body) = Block::parse(input)?;
         let then = if input.consume(Token::Then).is_some() {
-            let (rest, then) = IfExpr::block(input)?;
+            let (rest, then) = Block::parse(input)?;
             input = rest;
-            Some(Box::new(then))
+            Some(then)
         } else {
             None
         };
