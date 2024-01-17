@@ -1,8 +1,8 @@
 mod scoped_map;
 
-mod lexer;
 mod ast;
-use ast::{syntax, exec};
+mod lexer;
+use ast::{exec, syntax};
 
 fn main() {
     let file = std::fs::read_to_string("./test.tara").unwrap();

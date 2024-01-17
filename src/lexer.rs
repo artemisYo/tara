@@ -7,7 +7,7 @@ pub enum Token<'a> {
     Then,
     Let,
     // Operators
-	Semicolon,
+    Semicolon,
     Plus,
     Minus,
     Star,
@@ -19,7 +19,7 @@ pub enum Token<'a> {
     CloseCurly,
     // Literals
     Number(isize),
-    Name(&'a str)
+    Name(&'a str),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +37,9 @@ impl<'a> TokenIter<'a> {
         None
     }
     pub fn find_map<T, F>(&mut self, f: F) -> Option<T>
-    where F: FnOnce(Token<'_>) -> Option<T> {
+    where
+        F: FnOnce(Token<'_>) -> Option<T>,
+    {
         let t = *self.0.get(0)?;
         if let Some(o) = f(t) {
             self.next();
@@ -46,9 +48,9 @@ impl<'a> TokenIter<'a> {
         None
     }
     pub fn expect_done(&self) {
-		if self.0.len() > 0 {
-			panic!("Expected iterator to be done!\n{:?}", self.0);
-		}
+        if self.0.len() > 0 {
+            panic!("Expected iterator to be done!\n{:?}", self.0);
+        }
     }
 }
 impl<'a> std::iter::Iterator for TokenIter<'a> {
@@ -65,13 +67,9 @@ pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, &'a str> {
     let mut token_stream = vec![];
     input = input.trim_start();
     while input.len() > 0 {
-        const TOKS: &[Tokenizer] = &[
-            lex_operator,
-            lex_number,
-            lex_keyword,
-            lex_name,
-        ];
-        let (rest, t) = TOKS.iter()
+        const TOKS: &[Tokenizer] = &[lex_operator, lex_number, lex_keyword, lex_name];
+        let (rest, t) = TOKS
+            .iter()
             .map(|f| f(input))
             .find(Option::is_some)
             .flatten()
@@ -86,16 +84,17 @@ type Tokenizer = fn(&str) -> Option<(&str, Token)>;
 
 const OPERATORS: &[(&str, Token)] = {
     use Token::*;
-    &[("+", Plus)
-    , ("*", Star)
-    , ("-", Minus)
-    , ("/", Slash)
-    , ("=", Equals)
-    , (";", Semicolon)
-    , ("(", OpenParen)
-    , (")", CloseParen)
-    , ("{", OpenCurly)
-    , ("}", CloseCurly)
+    &[
+        ("+", Plus),
+        ("*", Star),
+        ("-", Minus),
+        ("/", Slash),
+        ("=", Equals),
+        (";", Semicolon),
+        ("(", OpenParen),
+        (")", CloseParen),
+        ("{", OpenCurly),
+        ("}", CloseCurly),
     ]
 };
 
@@ -104,44 +103,55 @@ fn starts_operator(input: char) -> bool {
 }
 
 fn lex_operator(input: &str) -> Option<(&str, Token)> {
-    OPERATORS.iter()
+    OPERATORS
+        .iter()
         .find(|(o, _)| input.starts_with(o))
         .map(|(o, t)| (&input[o.len()..], *t))
 }
 
 fn lex_number(input: &str) -> Option<(&str, Token)> {
-    let len = input.chars()
+    let len = input
+        .chars()
         .take_while(char::is_ascii_digit)
         .map(char::len_utf8)
         .sum::<usize>();
-    if len == 0 { return None; }
+    if len == 0 {
+        return None;
+    }
     let (num, rest) = input.split_at(len);
     let num = num.parse::<isize>().ok()?;
     Some((rest, Token::Number(num)))
 }
 
 fn lex_name(input: &str) -> Option<(&str, Token)> {
-    let len = input.chars()
+    let len = input
+        .chars()
         .take_while(|c| !c.is_whitespace() && !starts_operator(*c))
         .map(char::len_utf8)
         .sum::<usize>();
-    if len == 0 { return None; }
+    if len == 0 {
+        return None;
+    }
     let (name, rest) = input.split_at(len);
     Some((rest, Token::Name(name)))
 }
 
 fn lex_keyword(input: &str) -> Option<(&str, Token)> {
     fn starts_delimited(string: &str) -> bool {
-		string.chars().nth(0).map(|c| c.is_whitespace() || starts_operator(c)).unwrap_or(true)
+        string
+            .chars()
+            .nth(0)
+            .map(|c| c.is_whitespace() || starts_operator(c))
+            .unwrap_or(true)
     }
-	const KEYS: &[(&str, Token)] = &[
+    const KEYS: &[(&str, Token)] = &[
         ("if", Token::If),
-		("let", Token::Let),
+        ("let", Token::Let),
         ("then", Token::Then),
         ("else", Token::Else),
         ("while", Token::While),
     ];
-	KEYS.iter()
-    	.find(|(k, _)| input.starts_with(k) && starts_delimited(&input[k.len()..]))
-    	.map(|(k, t)| (&input[k.len()..], *t))
+    KEYS.iter()
+        .find(|(k, _)| input.starts_with(k) && starts_delimited(&input[k.len()..]))
+        .map(|(k, t)| (&input[k.len()..], *t))
 }

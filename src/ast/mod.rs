@@ -1,22 +1,22 @@
-pub mod syntax;
 pub mod exec;
+pub mod syntax;
 
 pub type Root = File;
 
 #[derive(Debug)]
 pub struct File {
-	body: Vec<Statement>,
-	tail: Option<Expr>,
+    body: Vec<Statement>,
+    tail: Option<Expr>,
 }
 #[derive(Debug)]
 pub enum Statement {
     Let(LetStmt),
-	Expr(Expr),
+    Expr(Expr),
 }
 #[derive(Debug)]
 pub struct LetStmt {
-	name: String,
-	init: Expr,
+    name: String,
+    init: Expr,
 }
 #[derive(Debug)]
 pub enum Expr {
@@ -42,12 +42,14 @@ pub struct WhileExpr {
 #[derive(Debug)]
 pub struct BinExpr {
     op: BinOp,
-    args: [Box<Expr>;2]
+    args: [Box<Expr>; 2],
 }
 #[derive(Debug)]
 pub enum BinOp {
-    Plus, Minus,
-    Star, Slash
+    Plus,
+    Minus,
+    Star,
+    Slash,
 }
 #[derive(Debug)]
 pub enum SinExpr {
