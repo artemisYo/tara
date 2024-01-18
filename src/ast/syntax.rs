@@ -21,7 +21,7 @@ impl File {
         } else {
             None
         };
-        Some((input, Self { body, tail }))
+        Some((input, Self { body, tail, typing: None }))
     }
 }
 
@@ -55,7 +55,7 @@ impl LetStmt {
         input.consume(Token::Equals)?;
         let (mut input, init) = Expr::parse(input)?;
         input.consume(Token::Semicolon)?;
-        Some((input, Statement::Let(LetStmt { name, init })))
+        Some((input, Statement::Let(LetStmt { name, init, typing: None })))
     }
 }
 
@@ -110,7 +110,7 @@ impl IfExpr {
         } else {
             None
         };
-        Some((input, Expr::If(Self { cond, smash, pass })))
+        Some((input, Expr::If(Self { cond, smash, pass, typing: None })))
     }
 }
 
@@ -128,7 +128,7 @@ impl WhileExpr {
         } else {
             None
         };
-        Some((input, Expr::While(Self { cond, body, then })))
+        Some((input, Expr::While(Self { cond, body, then, typing: None })))
     }
 }
 
@@ -150,6 +150,7 @@ impl BinExpr {
             Expr::Binary(BinExpr {
                 op,
                 args: [Box::new(lhs), Box::new(rhs)],
+                typing: None,
             }),
         ))
     }

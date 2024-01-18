@@ -1,3 +1,24 @@
+// type Token {
+//     span: Span, // span is common to all cases
+//     case Number: int, // only Number contains an int
+//     case Plus,
+//     case Minus,
+// }
+// type Option[T] { // generics
+//     case None,
+//     case Some: T,
+// }
+// type GPoint[T: Num] { // constrained generics
+//     x: T,
+//     y: T,
+// }
+// // function generics
+// func move[T: Num](point: GPoint[T], disp: GPoint[T]) GPoint[T] {
+//     point.x += disp.x;
+//     point.y += disp.y;
+//     point
+// }
+
 let a = (25 * 4 - 20) / 4;
 if a - 19 {
    5
