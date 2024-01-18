@@ -20,6 +20,7 @@ pub enum Token<'a> {
     // Literals
     Number(isize),
     Name(&'a str),
+    Comment,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,14 +68,16 @@ pub fn tokenize<'a>(mut input: &'a str) -> Result<Vec<Token<'a>>, &'a str> {
     let mut token_stream = vec![];
     input = input.trim_start();
     while input.len() > 0 {
-        const TOKS: &[Tokenizer] = &[lex_operator, lex_number, lex_keyword, lex_name];
+        const TOKS: &[Tokenizer] = &[lex_comment, lex_operator, lex_number, lex_keyword, lex_name];
         let (rest, t) = TOKS
             .iter()
             .map(|f| f(input))
             .find(Option::is_some)
             .flatten()
             .ok_or(input)?;
-        token_stream.push(t);
+        if t != Token::Comment {
+        	token_stream.push(t);
+        }
         input = rest.trim_start();
     }
     Ok(token_stream)
@@ -154,4 +157,12 @@ fn lex_keyword(input: &str) -> Option<(&str, Token)> {
     KEYS.iter()
         .find(|(k, _)| input.starts_with(k) && starts_delimited(&input[k.len()..]))
         .map(|(k, t)| (&input[k.len()..], *t))
+}
+
+fn lex_comment(input: &str) -> Option<(&str, Token)> {
+	if input.starts_with("//") {
+		let len = input.find('\n').unwrap_or(input.len() - 1);
+		return Some((&input[len..], Token::Comment));
+	}
+	None
 }
