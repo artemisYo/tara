@@ -17,9 +17,9 @@ impl File {
         }
         let tail = if let Some((rest, tail)) = Expr::parse(input) {
             input = rest;
-            Some(tail)
+            Box::new(tail)
         } else {
-            None
+            Box::new(Expr::Single(SinExpr::Empty))
         };
         Some((input, Self { body, tail, typing: None }))
     }
@@ -92,7 +92,7 @@ impl Block {
         input.consume(Token::OpenCurly)?;
         let (mut input, f) = File::parse(input)?;
         input.consume(Token::CloseCurly)?;
-        Some((input, Self(Box::new(f))))
+        Some((input, Self(f)))
     }
 }
 
@@ -106,9 +106,9 @@ impl IfExpr {
         let pass = if input.consume(Token::Else).is_some() {
             let (rest, pass) = Block::parse(input)?;
             input = rest;
-            Some(pass)
+            pass
         } else {
-            None
+            Block(File::empty())
         };
         Some((input, Expr::If(Self { cond, smash, pass, typing: None })))
     }
@@ -124,9 +124,9 @@ impl WhileExpr {
         let then = if input.consume(Token::Then).is_some() {
             let (rest, then) = Block::parse(input)?;
             input = rest;
-            Some(then)
+            then
         } else {
-            None
+            Block(File::empty())
         };
         Some((input, Expr::While(Self { cond, body, then, typing: None })))
     }
