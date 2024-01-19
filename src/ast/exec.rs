@@ -7,7 +7,7 @@ pub fn run(ast: Root) -> Value {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Value {
+pub enum Value {
 	Int(isize),
 	Void,
 }
@@ -80,6 +80,9 @@ impl Block {
 impl IfExpr {
     fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         let cond = self.cond.run(ctx);
+        if self.typing == Some(Type::Void) {
+            return Value::Void;
+        }
         if cond != Value::Int(0) {
             self.smash.run(ctx)
         } else {
@@ -90,21 +93,7 @@ impl IfExpr {
 
 impl WhileExpr {
     fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
-        let mut ran = false;
-        let mut scope = ctx.decls.scope();
-        while self.cond.run(ctx) != Value::Int(0) {
-            ctx.decls.restore(scope);
-            scope = ctx.decls.scope();
-            ran = true;
-            self.body.run_no_scope(ctx);
-        }
-        if ran {
-            let out = self.then.run(ctx);
-            ctx.decls.restore(scope);
-            out
-        } else {
-            Value::Void
-        }
+        Value::Void
     }
 }
 
