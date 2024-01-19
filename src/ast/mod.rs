@@ -16,8 +16,8 @@ pub struct File {
     typing: Option<Type>
 }
 impl File {
-	fn typing(&self) -> &Type {
-		if let Some(t) = self.typing.as_ref() {
+	fn typing(&mut self) -> &Type {
+		if let Some(t) = &self.typing {
 			return t;
 		}
 		let t = self.tail.typing();

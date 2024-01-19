@@ -2,12 +2,26 @@ use crate::scoped_map::*;
 
 use super::*;
 
-pub fn run(ast: Root) -> isize {
+pub fn run(ast: Root) -> Value {
     ast.run(&mut Ctx::new())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Value {
+	Int(isize),
+	Void,
+}
+impl Value {
+	fn unwrap_num(&self) -> isize {
+		match self {
+			Self::Int(i) => *i,
+			_ => panic!()
+		}
+	}
+}
+
 struct Ctx<'a> {
-    decls: ScopeMap<&'a str, isize>,
+    decls: ScopeMap<&'a str, Value>,
 }
 impl<'a> Ctx<'a> {
     fn new() -> Self {
@@ -18,9 +32,9 @@ impl<'a> Ctx<'a> {
 }
 
 impl File {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         self.body.iter().for_each(|s| s.run(ctx));
-        self.tail.as_ref().map(|e| e.run(ctx)).unwrap_or(0)
+        self.tail.as_ref().run(ctx)
     }
 }
 
@@ -41,7 +55,7 @@ impl LetStmt {
 }
 
 impl Expr {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         match self {
             Expr::Binary(b) => b.run(ctx),
             Expr::Single(s) => s.run(ctx),
@@ -52,64 +66,67 @@ impl Expr {
 }
 
 impl Block {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         let scope = ctx.decls.scope();
         let out = self.0.run(ctx);
         ctx.decls.restore(scope);
         out
     }
-    fn run_no_scope<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run_no_scope<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         self.0.run(ctx)
     }
 }
 
 impl IfExpr {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         let cond = self.cond.run(ctx);
-        if cond != 0 {
+        if cond != Value::Int(0) {
             self.smash.run(ctx)
         } else {
-            self.pass.as_ref().map(|p| p.run(ctx)).unwrap_or(0)
+            self.pass.run(ctx)
         }
     }
 }
 
 impl WhileExpr {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         let mut ran = false;
         let mut scope = ctx.decls.scope();
-        while self.cond.run(ctx) != 0 {
+        while self.cond.run(ctx) != Value::Int(0) {
             ctx.decls.restore(scope);
             scope = ctx.decls.scope();
             ran = true;
             self.body.run_no_scope(ctx);
         }
         if ran {
-            let out = self.then.as_ref().map(|p| p.run(ctx)).unwrap_or(0);
+            let out = self.then.run(ctx);
             ctx.decls.restore(scope);
             out
         } else {
-            0
+            Value::Void
         }
     }
 }
 
 impl BinExpr {
-    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> isize {
+    fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
         let [lhs, rhs] = &self.args;
-        match self.op {
-            BinOp::Plus => lhs.run(ctx) + rhs.run(ctx),
-            BinOp::Minus => lhs.run(ctx) - rhs.run(ctx),
-            BinOp::Star => lhs.run(ctx) * rhs.run(ctx),
-            BinOp::Slash => lhs.run(ctx) / rhs.run(ctx),
-        }
+        let lhs = lhs.run(ctx).unwrap_num();
+        let rhs = rhs.run(ctx).unwrap_num();
+        Value::Int(match self.op {
+            BinOp::Plus => lhs + rhs,
+            BinOp::Minus => lhs - rhs,
+            BinOp::Star => lhs * rhs,
+            BinOp::Slash => lhs / rhs,
+        })
     }
 }
 impl SinExpr {
-    fn run(&self, ctx: &mut Ctx) -> isize {
+    fn run(&self, ctx: &mut Ctx) -> Value {
         match self {
-            Self::Number(n) => *n,
-            Self::Name(n) => *ctx.decls.get(&n.as_str()).expect("use of undeclared name!"),
+            Self::Number(n) => Value::Int(*n),
+            Self::Name(n) => ctx.decls.get(&n.as_str()).expect("use of undeclared name!").clone(),
+            Self::Empty => Value::Void
         }
     }
 }
