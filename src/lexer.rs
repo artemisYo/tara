@@ -4,7 +4,6 @@ pub enum Token<'a> {
     If,
     Else,
     While,
-    Then,
     Let,
     // Operators
     Semicolon,
@@ -150,7 +149,6 @@ fn lex_keyword(input: &str) -> Option<(&str, Token)> {
     const KEYS: &[(&str, Token)] = &[
         ("if", Token::If),
         ("let", Token::Let),
-        ("then", Token::Then),
         ("else", Token::Else),
         ("while", Token::While),
     ];

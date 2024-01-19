@@ -93,7 +93,18 @@ impl IfExpr {
 
 impl WhileExpr {
     fn run<'a>(&'a self, ctx: &mut Ctx<'a>) -> Value {
-        Value::Void
+        if self.typing == Some(Type::Void) {
+            return Value::Void;
+        }
+        if self.cond.run(ctx) == Value::Int(0) {
+            let mut out = self.smashing.run(ctx);
+            while self.cond.run(ctx) == Value::Int(0) {
+                out = self.smashing.run(ctx);
+            }
+            out
+        } else {
+            self.pass.run(ctx)
+        }
     }
 }
 

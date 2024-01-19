@@ -115,13 +115,20 @@ impl IfExpr {
 }
 
 impl WhileExpr {
-    // WhileExpr::parse -> "while" Expr IfExpr::block
+    // WhileExpr::parse -> "while" Expr Block::parse { "else" Block::parse }?
     fn parse(mut input: TokenIter) -> Option<(TokenIter, Expr)> {
         input.consume(Token::While)?;
         let (input, cond) = Expr::parse(input)?;
         let cond = Box::new(cond);
-        let (mut input, body) = Block::parse(input)?;
-        Some((input, Expr::While(Self { cond, body, typing: None })))
+        let (mut input, smashing) = Block::parse(input)?;
+        let pass = if input.consume(Token::Else).is_some() {
+            let (rest, pass) = Block::parse(input)?;
+            input = rest;
+            pass
+        } else {
+            Block(File::empty())
+        };
+        Some((input, Expr::While(Self { cond, smashing, pass, typing: None })))
     }
 }
 

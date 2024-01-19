@@ -53,19 +53,26 @@ impl IfExpr {
         self.typing.get_or_insert_with(|| {
             let smash = self.smash.get_type();
 		    let pass = self.pass.get_type();
-            let t = if smash != pass {
+            if smash != pass {
 			    Type::Void
 		    } else {
 			    smash.clone()
-		    };
-            t
+		    }
         })
 	}
 }
 
 impl WhileExpr {
 	pub(super) fn get_type(&mut self) -> &Type {
-        &Type::Void
+        self.typing.get_or_insert_with(|| {
+            let smashing = self.smashing.get_type();
+            let pass = self.pass.get_type();
+            if smashing != pass {
+                Type::Void
+            } else {
+                smashing.clone()
+            }
+        })
 	}
 }
 

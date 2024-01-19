@@ -52,7 +52,8 @@ pub struct IfExpr {
 #[derive(Debug)]
 pub struct WhileExpr {
     cond: Box<Expr>,
-    body: Block,
+    smashing: Block,
+    pass: Block,
     typing: Option<Type>,
 }
 
