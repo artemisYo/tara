@@ -1,4 +1,5 @@
 pub mod exec;
+pub mod asm;
 pub mod syntax;
 pub mod typing;
 use typing::Type;
