@@ -1,8 +1,5 @@
 pub mod exec;
-<<<<<<< HEAD
 pub mod gen;
-=======
->>>>>>> parent of a2da5e6 (Stub of asm generation)
 pub mod syntax;
 pub mod typing;
 use typing::Type;
