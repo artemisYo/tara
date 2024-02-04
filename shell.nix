@@ -12,6 +12,6 @@ pkgs.mkShell {
             "rustfmt"
             "rust-analyzer"
         ])
-        nasm
+        typst
     ];
 }
