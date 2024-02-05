@@ -26,12 +26,9 @@ impl<K, V> ScopeMap<K, V> {
             .map(|(_, v)| v)
     }
     pub fn scope(&self) -> Scope {
-        Scope(self.len())
+        Scope(self.0.len())
     }
     pub fn restore(&mut self, scope: Scope) {
         self.0.truncate(scope.0)
-    }
-    pub fn len(&self) -> usize {
-        self.0.len()
     }
 }
