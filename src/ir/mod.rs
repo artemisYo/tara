@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+pub mod terms;
+
 pub struct Unit {
     ret_sig: Vec<Type>,
     instructions: Instructions,
@@ -28,10 +30,11 @@ pub struct BlockData {
 	span: [Instruction; 2],
 	term: Terminator,
 }
+
 pub enum Terminator {
     Branch(Block, Box<[Instruction]>),
     If(Instruction, Box<[Terminator; 2]>),
-	Ret(Instruction),
+	Ret(Option<Instruction>),
 }
 
 impl std::ops::Index<Instruction> for Instructions {
