@@ -3,8 +3,8 @@ Tara is supposed to be capable of relatively high performance,
 thus I want to avoid inducing runtime overhead like a GC or
 unnecessary indirection like persistent datastructures.
 
-## Value Semantics
-Tara aims to support reasoning about variables in a principle manner.
+## Value Semantics / Affine Types
+Tara aims to support reasoning about variables in a principled manner.
 However complexity associated with tracking of lifetimes references' for 
 ensuring validity is quite a big burden.
 As such tara instead bets on value semantics, i.e. no references whatsoever.
@@ -12,7 +12,7 @@ Data is move-by-default and any modifications by other functions need to be
 communicated by returning the modified version of the object.
 This is no different from languages like Haskell, except for the fact that
 the older version of the value becomes void and unusable:
-```
+```tara
 func increment(x: int) int { x + 1 }
 
 func main() {
@@ -20,27 +20,48 @@ func main() {
     let x = increment(x); // → x = 6
     let y = 4;
     increment(y);
-    // doSomething(y); is invalid now
+    // foo(y); is invalid now
 }
 ```
 
 This does not bar mechanisms like `Copy` traits from allowing copy-by-default
 for certain types.
 
+## Opt-In Linear Types
+In some cases it is desirable for API-designers to ensure something is done
+with a value, i.e. it is used at least once. 
+While that is relatively rare it could be grounds for supporting a mechanism
+(similar —but opposite— to Rust's `Copy`)
+to allow placing requirement of usage on a type
+(Rust offers the attribute `#[must_use]`, which is similar).
+```tara
+type Foo {
+	Bar: Foo;
+}
+// get it? not clumsy? no implicit Drops?
+implement !Clumsy(Foo) {}
+
+func main() {
+	let foo = Foo.Bar;
+	consumeFoo(foo); 
+	// shows error if foo unused.
+}
+```
+
 ## Named Function Parameters
 Named function parameters, the caveat being the later discussed
 partial function application making the semantics a bit more complex.
 A function has a type along the lines of:
 ```tara
-func foo(bar: int, baz: bool) int {...}
-// → foo: int -> bool -> int
+func foo(bar: int, baz: bool) -> int {...}
+// → foo: (int, bool) -> int
 ```
 but with named parameters, the type is adjusted to reflect that,
 while still being congruent to the previous type:
 ```tara
-func foo(first bar: int, second baz: bool) int {...}
-// → foo: (first: int) -> (second: bool) -> int
-func higherOrderFunction(f: int -> bool -> int) -> int {...}
+func foo(first bar: int, second baz: bool) -> int {...}
+// → foo: (first: int, second: bool) -> int
+func higherOrderFunction(f: (int, bool) -> int) -> int {...}
 
 func main() { higherOrderFunction(foo); }
 ```
@@ -49,15 +70,15 @@ func main() { higherOrderFunction(foo); }
 Values of types are constructed using data constructors. 
 They look like Agda's data constructors: Types are declared
 with associated function signatures, without any implementation.
-Data constructors may also not name fields, in which case they 
-follow the same treatment that fields in tuples do.
+Data constructors may also choose to not name fields,
+in which case they follow the same treatment that fields in tuples do.
 ```tara
 type Foo {
-    MakeFoo: (bar: int) -> (baz: int) -> Foo;
+    MakeFoo: (bar: int, baz: int) -> Foo;
 }
 
 type Bar {
-    Bar: int -> int -> Bar;
+    Bar: (int, int) -> Bar;
 }
 
 func main() {
@@ -75,7 +96,7 @@ type Color {
     Red: Color;
     Blue: Color;
     Green: Color;
-    Other: (r: u8) -> (g: u8) -> (b: u8) -> Color;
+    Other: (r: u8, g: u8, b: u8) -> Color;
 }
 
 func main() {
@@ -97,7 +118,7 @@ type Color {
     Green: Color;
     Other: [u8;3] -> Color;
 }
-func hex(c: Color) String {
+func hex(c: Color) -> String {
     case c {
         Color.Red -> "FF0000",
         Color.Blue -> "0000FF",
@@ -107,10 +128,10 @@ func hex(c: Color) String {
         },
     }
 }
-func toplevelHex(Color.Red: Color) String { "FF0000" }
-func toplevelHex(Color.Blue: Color) String { "0000FF" }
-func toplevelHex(Color.Green: Color) String { "00FF00" }
-func toplevelHex(Color.Other(v): Color) String { 
+func toplevelHex(Color.Red: Color) -> String { "FF0000" }
+func toplevelHex(Color.Blue: Color) -> String { "0000FF" }
+func toplevelHex(Color.Green: Color) -> String { "00FF00" }
+func toplevelHex(Color.Other(v): Color) -> String { 
     fmt("{:X}{:X}{:X}", v[0], v[1], v[2]) 
 }
 ```
@@ -122,7 +143,7 @@ excluding at most binary sizes.
 Done by generating a struct of the function's arguments whenever
 they are only partially supplied (implicit closure).
 ```tara
-func add(lhs: int, rhs: int) int {...}
+func add(lhs: int, rhs: int) -> int {...}
 
 func main() {
     let add5 = add(5);
@@ -135,7 +156,7 @@ func main() {
 Functions are applied in their argument order,
 unless specifically rearranged using named parameters.
 ```tara
-func pow(base base: int, exponent exp: int) int {...}
+func pow(base base: int, exponent exp: int) -> int {...}
 
 func main() {
     let square = pow(exponent: 2);
@@ -162,9 +183,9 @@ Thus partial application (just like in Haskell) and
 named parameters are possible:
 ```tara
 type Pair(first a, second b) {
-    Pair: a -> b -> Pair(a, b);
+    Pair: (a, b) -> Pair(a, b);
 }
-// → Pair: (first: Type) -> (second: Type) -> Type
+// → Pair: (first: Type, second: Type) -> Type
 ```
 
 ## Typeclasses
@@ -174,15 +195,15 @@ or to accept out-of-order partially applied type constructors.
 This helps us avoid having to create wrapper types just to implement
 certain typeclasses in a specific way:
 ```tara
-class Functor(f: Type -> Type) {
-    map: (a -> b) -> f(a) -> f(b);
+class Functor(f: (Type) -> Type) {
+    map: (a -> b, f(a)) -> f(b);
 }
 type Pair(first a, second b) {
     Pair: a -> b -> Pair(a, b);
 }
 
 implement Functor( Pair(second: x) ) {
-    func map(f: a -> b, pair: Pair(a, x)) Pair(b, x) {
+    func map(f: a -> b, pair: Pair(a, x)) -> Pair(b, x) {
         let (fst, snd) = pair;
         return Pair(f(fst), snd);
     }
@@ -245,6 +266,10 @@ func main() {
     // invalid access as Foo.Bar ∨ Foo.Baz = Foo
 }
 ```
+The internal Layout of subtypes remains the same,
+even if they are declared as normal variants.
+This is to avoid unnecessary data movement costs when upcasting,
+as these subtypes are not intended to stand on their own.
 
 ## Type Combinators
 Certain generic types, such as tuples, 
