@@ -41,10 +41,7 @@ pub fn tokenize(errs: &mut ErrorQueue, string: String) -> Option<TokenTree> {
 	match tokenizer.run_toplevel() {
 		TokRes::Fatal => return None,
 		TokRes::NoMatch => {
-			errs.log_error(Message {
-				summary: "Too many scopes were closed!".into(),
-				hints: vec![],
-			});
+			errs.log_error(TokErr::ClosedUnopenedGroup);
 			return None;
 		},
 		TokRes::Match => {}
@@ -96,10 +93,7 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 				.find(|r| *r != TokRes::NoMatch)
 			{				
 				Some(TokRes::Fatal) => return TokRes::Fatal,
-				None => self.errs.log_error(Message {
-					summary: format!("Unrecognized token '{}'!", self.get_string(span)).into(),
-					hints: vec!["how?".into()],
-				}),
+				None => self.errs.log_error(TokErr::UnknownToken(self.get_string(span).into())),
 				_ => {}
 			}
 		}
@@ -160,13 +154,13 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 			return TokRes::NoMatch;
 		}
 
-		for (prefix, base) in MODES {
+		for &(prefix, base) in MODES {
 			let Some(rest) = string.strip_prefix(prefix)
 			else { continue; };
-			if rest.chars().any(|c| !c.is_digit(*base)) {
-				self.errs.log_error(Message {
-					summary: format!("Unexpected digit(s) in number '{}'!", string).into(),
-					hints: vec![],
+			if rest.chars().any(|c| !c.is_digit(base)) {
+				self.errs.log_error(TokErr::WrongDigit {
+					number: string.into(),
+					base,
 				});
 			}
 			self.buffer.push(TokenNode {
@@ -201,17 +195,14 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 
 			let Some(&close_span) = self.stream.peek()
 			else {
-				self.errs.log_error(Message {
-					summary: "EOF reached with unclosed scope!".into(),
-					hints: vec![],
-				});
+				self.errs.log_error(TokErr::EofInScope);
 				return TokRes::Fatal;
 			};
 			let close_string = self.get_string(close_span);
 			if close_string != *close {
-				self.errs.log_error(Message {
-					summary: format!("Expected '{}' but got '{}'!", close, close_string).into(),
-					hints: vec![],
+				self.errs.log_error(TokErr::WrongGroupClosed {
+					expected: close,
+					found: close_string.into(),
 				});
 			} else {
 				self.stream.next();
@@ -243,7 +234,6 @@ fn on_delims(s: &str) -> Option<usize> {
 	None
 }
 
-
 macro_rules! mk_lookup {
 	(
 		Keys: [ $($ks:literal : $kt:path),* $(,)? ],
@@ -268,6 +258,43 @@ mk_lookup! {
 		"{", "}": TokenKind::Brace,
 		"[", "]": TokenKind::Bracket,
 	],
+}
+
+enum TokErr {
+	ClosedUnopenedGroup,
+	EofInScope,
+	UnknownToken(Box<str>),
+	WrongDigit {
+		number: Box<str>,
+		base: u32,
+	},
+	WrongGroupClosed {
+		expected: &'static str,
+		found: Box<str>,
+	},
+}
+impl Message for TokErr {
+	fn summary(&mut self) -> Box<str> {
+		match self {
+			Self::ClosedUnopenedGroup => "Found scope closing token outside of any scope!".into(),
+			Self::EofInScope => "Reached end of file in unclosed scope!".into(),
+			Self::UnknownToken(t) => format!("Unknown token encountered: '{}'", t).into(),
+			Self::WrongDigit {
+				number,
+				base,
+			} => format!("Encountered unexpected digit(s) for base {} in number: '{}'", base, number).into(),
+			Self::WrongGroupClosed {
+				expected,
+				found,
+			} => format!("Encountered scope closing '{}' when expected '{}'!", found, expected).into(),
+		}
+	}
+	fn hints(&mut self) -> Box<dyn Iterator<Item = Box<str>>> {
+		Box::new([].into_iter())
+	}
+	fn location(&mut self) -> Box<str> {
+		"".into()
+	}
 }
 
 struct SplitIntersperse<'a> {
