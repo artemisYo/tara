@@ -1,3 +1,5 @@
+use crate::errors::{ErrorQueue, Message};
+
 #[derive(Debug)]
 pub struct TokenTree {
 	tokens: Vec<TokenNode>,
@@ -26,7 +28,7 @@ pub enum TokenKind {
 	Bracket,
 }
 
-pub fn tokenize(string: String) -> Option<TokenTree> {
+pub fn tokenize(errs: &mut ErrorQueue, string: String) -> Option<TokenTree> {
 	let stream = SplitIntersperse::new(&string, on_delims)
 		.filter(|span| !string[span.start..span.end].trim().is_empty())
 		.peekable();
@@ -34,9 +36,18 @@ pub fn tokenize(string: String) -> Option<TokenTree> {
 		buffer: vec![],
 		string: &string,
 		stream,
+		errs,
 	};
-	if tokenizer.run_toplevel() == TokRes::Fatal {
-		return None;
+	match tokenizer.run_toplevel() {
+		TokRes::Fatal => return None,
+		TokRes::NoMatch => {
+			errs.log_error(Message {
+				summary: "Too many scopes were closed!".into(),
+				hints: vec![],
+			});
+			return None;
+		},
+		TokRes::Match => {}
 	}
 	Some(TokenTree {
 		tokens: tokenizer.buffer,
@@ -45,6 +56,7 @@ pub fn tokenize(string: String) -> Option<TokenTree> {
 }
 
 struct Tokenizer<'a, S: Iterator> {
+	errs: &'a mut ErrorQueue,
 	buffer: Vec<TokenNode>,
 	stream: std::iter::Peekable<S>,
 	string: &'a str,
@@ -62,6 +74,9 @@ enum TokRes {
 
 // tokenizers
 impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
+	fn get_string(&self, span: Span) -> &str {
+		&self.string[span.start..span.end]
+	}
 	fn run_toplevel(&mut self) -> TokRes {
 		let tokenizers = &[
 			Self::run_keys,
@@ -72,23 +87,27 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 		];
 
 		while let Some(&span) = self.stream.peek() {
-			if is_group_closing(&self.string[span.start..span.end]) {
-				return TokRes::Match;
+			if is_group_closing(self.get_string(span)) {
+				// indicate expectation of continuation
+				return TokRes::NoMatch;
 			}
 			match tokenizers.iter()
-				.map(|f| f(self, span))
+				.map(|f| f(self))
 				.find(|r| *r != TokRes::NoMatch)
 			{				
 				Some(TokRes::Fatal) => return TokRes::Fatal,
-				None => todo!("report wholly unrecognized token"),
+				None => self.errs.log_error(Message {
+					summary: format!("Unrecognized token '{}'!", self.get_string(span)).into(),
+					hints: vec!["how?".into()],
+				}),
 				_ => {}
 			}
-			self.stream.next();
 		}
 		TokRes::Match
 	}
 	
-	fn run_ident(&mut self, span: Span) -> TokRes {
+	fn run_ident(&mut self) -> TokRes {
+		let span = self.stream.next().unwrap();
 		self.buffer.push(TokenNode {
 			cc: 0,
 			kind: TokenKind::Ident,
@@ -96,8 +115,9 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 		});
 		TokRes::Match
 	}
-	fn run_keys(&mut self, span: Span) -> TokRes {
-		let string = &self.string[span.start..span.end];
+	fn run_keys(&mut self) -> TokRes {
+		let &span = self.stream.peek().unwrap();
+		let string = self.get_string(span);
 		for (key, token) in KEYS {
 			if string == *key {
 				self.buffer.push(TokenNode {
@@ -105,13 +125,15 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 					kind: *token,
 					span,
 				});
+				self.stream.next();
 				return TokRes::Match;
 			}
 		}
 		TokRes::NoMatch
 	}
-	fn run_puncts(&mut self, span: Span) -> TokRes {
-		let string = &self.string[span.start..span.end];
+	fn run_puncts(&mut self) -> TokRes {
+		let &span = self.stream.peek().unwrap();
+		let string = self.get_string(span);
 		for (punct, token) in PUNCTS {
 			if string == *punct {
 				self.buffer.push(TokenNode {
@@ -119,13 +141,15 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 					kind: *token,
 					span
 				});
+				self.stream.next();
 				return TokRes::Match;
 			}
 		}
 		TokRes::NoMatch
 	}
-	fn run_numbers(&mut self, span: Span) -> TokRes {
-		let string = &self.string[span.start..span.end];
+	fn run_numbers(&mut self) -> TokRes {
+		let &span = self.stream.peek().unwrap();
+		let string = self.get_string(span);
 		const MODES: &[(&str, u32)] = &[
 			("0x", 16),
 			("0b", 2),
@@ -140,20 +164,25 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 			let Some(rest) = string.strip_prefix(prefix)
 			else { continue; };
 			if rest.chars().any(|c| !c.is_digit(*base)) {
-				todo!("report int token error");
+				self.errs.log_error(Message {
+					summary: format!("Unexpected digit(s) in number '{}'!", string).into(),
+					hints: vec![],
+				});
 			}
 			self.buffer.push(TokenNode {
 				cc: 0,
 				kind: TokenKind::Number,
 				span,
 			});
+			self.stream.next();
 			return TokRes::Match;
 		}
 		
 		unreachable!()
 	}
-	fn run_groups(&mut self, open_span: Span) -> TokRes {
-		let open_string = &self.string[open_span.start..open_span.end];
+	fn run_groups(&mut self) -> TokRes {
+		let &open_span = self.stream.peek().unwrap();
+		let open_string = self.get_string(open_span);
 		for (open, close, token) in GROUPS {
 			if open_string != *open {
 				continue;
@@ -164,23 +193,30 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 				kind: *token,
 				span: open_span,
 			});
-			
 			self.stream.next();
+			
 			if self.run_toplevel() == TokRes::Fatal {
 				return TokRes::Fatal;
 			}
 
-			let Some(close_span) = self.stream.peek()
+			let Some(&close_span) = self.stream.peek()
 			else {
-				todo!("Report unclosed group");
+				self.errs.log_error(Message {
+					summary: "EOF reached with unclosed scope!".into(),
+					hints: vec![],
+				});
 				return TokRes::Fatal;
 			};
-			let close_string = &self.string[close_span.start..close_span.end];
+			let close_string = self.get_string(close_span);
 			if close_string != *close {
-				todo!("Report wrong group closing");
-				return TokRes::Fatal;
+				self.errs.log_error(Message {
+					summary: format!("Expected '{}' but got '{}'!", close, close_string).into(),
+					hints: vec![],
+				});
+			} else {
+				self.stream.next();
 			}
-
+			
 			let cc = self.buffer.len() - idx - 1;
 			self.buffer[idx].cc = cc;
 			self.buffer[idx].span.end = close_span.end;
