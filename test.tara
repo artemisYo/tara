@@ -1,0 +1,12 @@
+func fib(n: int) -> int {
+    if n < 2 {
+        n
+    } else {
+        fib(n-2) + fib(n-1)
+    }
+}
+
+func main() {
+    let foo = fib(5);
+    print("foo is: {}", foo);
+}

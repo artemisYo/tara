@@ -312,7 +312,7 @@ func match(x: (Number: int) | (Bool: bool) | (Text: String) ) String {
         Text(_) -> ...,
     }
 }
-func tuples( x: ((num: int), (b: bool), (text: String)) ) {
+func tuples( x: (num: int, b: bool, text: String) ) {
     if x.b { 
         fmt("{}", x.num) 
     } else {

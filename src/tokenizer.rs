@@ -3,13 +3,12 @@ use crate::errors::{ErrorQueue, Message};
 #[derive(Debug)]
 pub struct TokenTree {
 	tokens: Vec<TokenNode>,
-	source: String,
+	source: Vec<Box<str>>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TokenNode {
-	cc: usize,
-	kind: TokenKind,
-	span: Span,
+	pub kind: TokenKind,
+	pub span: Span,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
@@ -18,22 +17,110 @@ pub struct Span {
 }
 #[derive(Debug, Clone, Copy)]
 pub enum TokenKind {
+	// Keywords / Puncts
+	Eq,
+	Less,
+	More,
+	LessEq,
+	MoreEq,
 	Plus,
 	Minus,
+	Semi,
+	Colon,
+	Comma,
+	ArrRight,
 	Func,
-	Ident,
-	Number,
-	Paren,
-	Brace,
-	Bracket,
+	// Literals(string_idx)
+	Name(usize),
+	Number(usize),
+	String(usize),
+	// Groups(child_count)
+	Paren(usize),
+	Brace(usize),
+	Bracket(usize),
+}
+impl PartialEq for TokenKind {
+	fn eq(&self, other: &TokenKind) -> bool {
+		std::mem::discriminant(self) == std::mem::discriminant(other)
+	}
+}
+impl Eq for TokenKind {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TokenView<'a> {
+	tokens: &'a [TokenNode],
+	source: &'a [Box<str>],
+}
+impl TokenTree {
+	pub fn view<'a>(&'a self) -> TokenView<'a> {
+		TokenView {
+			tokens: &self.tokens,
+			source: &self.source,
+		}
+	}
+}
+impl TokenNode {
+	fn cc(&self) -> usize {
+		match self.kind {
+			TokenKind::Paren(cc) |
+			TokenKind::Brace(cc) |
+			TokenKind::Bracket(cc) => cc,
+			_ => 0
+		}
+	}
+	fn set_cc(&mut self, cc: usize) {
+		self.kind = match self.kind {
+			TokenKind::Paren(_) => TokenKind::Paren(cc),
+			TokenKind::Brace(_) => TokenKind::Brace(cc),
+			TokenKind::Bracket(_) => TokenKind::Bracket(cc),
+			t => t,
+		};
+	}
+	fn string_idx(&self) -> Option<usize> {
+		match self.kind {
+			TokenKind::Name(i)   |
+			TokenKind::Number(i) |
+			TokenKind::String(i) => Some(i),
+			_ => None,
+		}
+	}
+}
+impl<'a> TokenView<'a> {
+	pub fn next(&mut self) -> Option<TokenNode> {
+		let cur = *self.tokens.first()?;
+		self.tokens = self.tokens.get(cur.cc() + 1..)?;
+		Some(cur)
+	}
+	pub fn peek(&mut self) -> Option<TokenNode> {
+		let cur = *self.tokens.first()?;
+		Some(cur)
+	}
+	pub fn expect(&mut self, k: TokenKind) -> Option<TokenNode> {
+		if self.peek()?.kind != k { return None; }
+		self.next()
+	}
+	pub fn children(&self) -> Option<Self> {
+		let mut out = *self;
+		let cc = self.tokens.first()?.cc();
+		out.tokens = &out.tokens[1..][..cc];
+		Some(out)
+	}
+	pub fn get_current_string(&self) -> Option<&str> {
+		let cur = self.tokens.first()?.string_idx()?;
+		Some(&self.source.get(cur)?)
+	}
+	pub fn get_string(&self, t: TokenNode) -> Option<&str> {
+		Some(&self.source.get(t.string_idx()?)?)
+	}
 }
 
-pub fn tokenize(errs: &mut ErrorQueue, string: String) -> Option<TokenTree> {
+pub fn tokenize(errs: &mut ErrorQueue, string: &str) -> Option<TokenTree> {
 	let stream = SplitIntersperse::new(&string, on_delims)
 		.filter(|span| !string[span.start..span.end].trim().is_empty())
 		.peekable();
 	let mut tokenizer = Tokenizer {
 		buffer: vec![],
+		source: vec![],
 		string: &string,
 		stream,
 		errs,
@@ -48,13 +135,14 @@ pub fn tokenize(errs: &mut ErrorQueue, string: String) -> Option<TokenTree> {
 	}
 	Some(TokenTree {
 		tokens: tokenizer.buffer,
-		source: string,
+		source: tokenizer.source,
 	})
 }
 
 struct Tokenizer<'a, S: Iterator> {
 	errs: &'a mut ErrorQueue,
 	buffer: Vec<TokenNode>,
+	source: Vec<Box<str>>,
 	stream: std::iter::Peekable<S>,
 	string: &'a str,
 }
@@ -73,6 +161,21 @@ enum TokRes {
 impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 	fn get_string(&self, span: Span) -> &str {
 		&self.string[span.start..span.end]
+	}
+	fn intern_string(&mut self, span: Span) -> usize {
+		let string = self.get_string(span);
+		match self.source.iter()
+			.enumerate()
+			.find(|(_, s)| ***s == *string)
+			.map(|(i, _)| i)
+		{
+			Some(i) => i,
+			None => {
+				let i = self.source.len();
+				self.source.push(string.into());
+				i
+			},
+		}
 	}
 	fn run_toplevel(&mut self) -> TokRes {
 		let tokenizers = &[
@@ -102,9 +205,9 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 	
 	fn run_ident(&mut self) -> TokRes {
 		let span = self.stream.next().unwrap();
+		let idx = self.intern_string(span);
 		self.buffer.push(TokenNode {
-			cc: 0,
-			kind: TokenKind::Ident,
+			kind: TokenKind::Name(idx),
 			span,
 		});
 		TokRes::Match
@@ -115,7 +218,6 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 		for (key, token) in KEYS {
 			if string == *key {
 				self.buffer.push(TokenNode {
-					cc: 0,
 					kind: *token,
 					span,
 				});
@@ -131,7 +233,6 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 		for (punct, token) in PUNCTS {
 			if string == *punct {
 				self.buffer.push(TokenNode {
-					cc: 0,
 					kind: *token,
 					span
 				});
@@ -163,9 +264,9 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 					base,
 				});
 			}
+			let idx = self.intern_string(span);
 			self.buffer.push(TokenNode {
-				cc: 0,
-				kind: TokenKind::Number,
+				kind: TokenKind::Number(idx),
 				span,
 			});
 			self.stream.next();
@@ -183,7 +284,6 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 			}
 			let idx = self.buffer.len();
 			self.buffer.push(TokenNode {
-				cc: 0,
 				kind: *token,
 				span: open_span,
 			});
@@ -209,7 +309,7 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 			}
 			
 			let cc = self.buffer.len() - idx - 1;
-			self.buffer[idx].cc = cc;
+			self.buffer[idx].set_cc(cc);
 			self.buffer[idx].span.end = close_span.end;
 			return TokRes::Match;
 		}
@@ -238,7 +338,7 @@ macro_rules! mk_lookup {
 	(
 		Keys: [ $($ks:literal : $kt:path),* $(,)? ],
 		Puncts: [ $($ps:literal : $pt:path),* $(,)? ],
-		Groups: [ $($go:literal , $gc:literal : $gt:path),* $(,)? ],
+		Groups: [ $($go:literal , $gc:literal : $gt:expr),* $(,)? ],
 	) => {
 		const KEYS: &[(&str, TokenKind)] = &[ $( ($ks, $kt), )* ];
 		const PUNCTS: &[(&str, TokenKind)] = &[ $( ($ps, $pt), )* ];
@@ -247,16 +347,31 @@ macro_rules! mk_lookup {
 	};
 }
 
+
 mk_lookup! {
-	Keys: [ "func": TokenKind::Func ],
+	Keys: [
+		"func": TokenKind::Func,
+		"let": TokenKind::Let,
+	],
+	// do order from prefix-overlapping strings
+	// from longest to shortest
 	Puncts: [
+		"->": TokenKind::ArrRight,
+		"=": TokenKind::Eq,
+		"<=": TokenKind::LessEq,
+		">=": TokenKind::MoreEq,
+		"<": TokenKind::Less,
+		">": TokenKind::More,
 		"+": TokenKind::Plus,
 		"-": TokenKind::Minus,
+		":": TokenKind::Colon,
+		";": TokenKind::Semi,
+		",": TokenKind::Comma,
 	],
 	Groups: [
-		"(", ")": TokenKind::Paren,
-		"{", "}": TokenKind::Brace,
-		"[", "]": TokenKind::Bracket,
+		"(", ")": TokenKind::Paren(0),
+		"{", "}": TokenKind::Brace(0),
+		"[", "]": TokenKind::Bracket(0),
 	],
 }
 
