@@ -19,6 +19,7 @@ pub struct Span {
 pub enum TokenKind {
 	// Keywords / Puncts
 	Eq,
+	EqEq,
 	Less,
 	More,
 	LessEq,
@@ -30,6 +31,9 @@ pub enum TokenKind {
 	Comma,
 	ArrRight,
 	Func,
+	Let,
+	If,
+	Else,
 	// Literals(string_idx)
 	Name(usize),
 	Number(usize),
@@ -76,7 +80,7 @@ impl TokenNode {
 			t => t,
 		};
 	}
-	fn string_idx(&self) -> Option<usize> {
+	pub fn string_idx(&self) -> Option<usize> {
 		match self.kind {
 			TokenKind::Name(i)   |
 			TokenKind::Number(i) |
@@ -91,7 +95,7 @@ impl<'a> TokenView<'a> {
 		self.tokens = self.tokens.get(cur.cc() + 1..)?;
 		Some(cur)
 	}
-	pub fn peek(&mut self) -> Option<TokenNode> {
+	pub fn peek(&self) -> Option<TokenNode> {
 		let cur = *self.tokens.first()?;
 		Some(cur)
 	}
@@ -99,11 +103,17 @@ impl<'a> TokenView<'a> {
 		if self.peek()?.kind != k { return None; }
 		self.next()
 	}
+	pub fn peek_if(&self, k: TokenKind) -> Option<TokenNode> {
+		self.peek().filter(|t| t.kind == k)
+	}
 	pub fn children(&self) -> Option<Self> {
 		let mut out = *self;
 		let cc = self.tokens.first()?.cc();
 		out.tokens = &out.tokens[1..][..cc];
 		Some(out)
+	}
+	pub fn children_if(&self, k: TokenKind) -> Option<Self> {
+		self.peek_if(k).map(|_| self.children())?
 	}
 	pub fn get_current_string(&self) -> Option<&str> {
 		let cur = self.tokens.first()?.string_idx()?;
@@ -112,10 +122,13 @@ impl<'a> TokenView<'a> {
 	pub fn get_string(&self, t: TokenNode) -> Option<&str> {
 		Some(&self.source.get(t.string_idx()?)?)
 	}
+	pub fn is_empty(&self) -> bool {
+		self.tokens.is_empty()
+	}
 }
 
 pub fn tokenize(errs: &mut ErrorQueue, string: &str) -> Option<TokenTree> {
-	let stream = SplitIntersperse::new(&string, on_delims)
+	let stream = ChunksByFn::new(string, split_on_delims)
 		.filter(|span| !string[span.start..span.end].trim().is_empty())
 		.peekable();
 	let mut tokenizer = Tokenizer {
@@ -183,6 +196,7 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 			Self::run_puncts,
 			Self::run_groups,
 			Self::run_numbers,
+			Self::run_string,
 			Self::run_ident,
 		];
 
@@ -202,7 +216,20 @@ impl<'a, S: Iterator<Item = Span>> Tokenizer<'a, S> {
 		}
 		TokRes::Match
 	}
-	
+	fn run_string(&mut self) -> TokRes {
+		let &span = self.stream.peek().unwrap();
+		let string = self.get_string(span);
+		if !string.starts_with('"') {
+			return TokRes::NoMatch;
+		}
+		self.stream.next();
+		let idx = self.intern_string(span);
+		self.buffer.push(TokenNode {
+			kind: TokenKind::String(idx),
+			span,
+		});
+		TokRes::Match
+	}
 	fn run_ident(&mut self) -> TokRes {
 		let span = self.stream.next().unwrap();
 		let idx = self.intern_string(span);
@@ -324,16 +351,6 @@ fn is_group_closing(string: &str) -> bool {
 	false
 }
 
-fn on_delims(s: &str) -> Option<usize> {
-	let w = s.chars().take_while(|c| c.is_whitespace()).count();
-	if w != 0 { return Some(w); }
-	
-	for d in DELIMS {
-		if s.starts_with(d) { return Some(d.chars().count()); }
-	}
-	None
-}
-
 macro_rules! mk_lookup {
 	(
 		Keys: [ $($ks:literal : $kt:path),* $(,)? ],
@@ -352,11 +369,14 @@ mk_lookup! {
 	Keys: [
 		"func": TokenKind::Func,
 		"let": TokenKind::Let,
+		"if": TokenKind::If,
+		"else": TokenKind::Else,
 	],
 	// do order from prefix-overlapping strings
 	// from longest to shortest
 	Puncts: [
 		"->": TokenKind::ArrRight,
+		"==": TokenKind::EqEq,
 		"=": TokenKind::Eq,
 		"<=": TokenKind::LessEq,
 		">=": TokenKind::MoreEq,
@@ -412,71 +432,63 @@ impl Message for TokErr {
 	}
 }
 
-struct SplitIntersperse<'a> {
-	chars: std::str::Chars<'a>,
-	needle: fn(&str) -> Option<usize>,
-	gap_start: usize,
-	gap_end: usize,
-}
-
-impl<'a> Iterator for SplitIntersperse<'a> {
-	type Item = Span;
-	fn next(&mut self) -> Option<Self::Item> {
-		if self.has_gap() {
-			return Some(self.extract_gap());
+fn split_on_delims(s: &str) -> usize {
+	for i in 0..s.len() {
+		let s = &s[i..];
+		let t = s.trim_start();
+		if t.len() != s.len() {
+			if i != 0 { return i; }
+			return s.len() - t.len();
 		}
-		if let Some(len) = self.find_next_match() {
-			let out = self.extract_gap();
-			self.gap_end += len;
-			return Some(out);
-		}
-		if self.has_gap() {
-			return Some(self.extract_gap());
-		}
-		None
-	}
-}
-
-impl<'a> SplitIntersperse<'a> {
-	fn new(string: &'a str, needle: fn(&str) -> Option<usize>) -> Self {
-		Self {
-			chars: string.chars(),
-			needle,
-			gap_start: 0,
-			gap_end: 0,
-		}
-	}
-	fn extract_gap(&mut self) -> Span {
-		let out = Span {
-			start: self.gap_start,
-			end: self.gap_end,
-		};
-		self.gap_start = self.gap_end;
-		return out;
-	}
-	fn find_next_match(&mut self) -> Option<usize> {
-		while !self.is_empty() {
-			let Some(count) = (self.needle)(self.chars.as_str())
-			else {
-				let c = self.chars.next().unwrap();
-				self.gap_end += c.len_utf8();
-				continue;
-			};
+		if let Some(t) = s.strip_prefix('"') {
+			if i != 0 { return i; }
 			let mut len = 0;
-			for _ in 0..count {
-				let c = self.chars.next().unwrap();
+			let mut escaped = false;
+			for c in t.chars() {
+				match c {
+					'"' if !escaped => return len + 2,
+					'\\' if !escaped => escaped = true,
+					_ => escaped = false,
+				}
 				len += c.len_utf8();
 			}
-			return Some(len);
+			return len + 1;
 		}
-		None
+		for d in DELIMS {
+			if s.starts_with(d) {
+				if i != 0 { return i; }
+				return d.len();
+			}
+		}
 	}
-	#[inline]
-	fn has_gap(&self) -> bool {
-		self.gap_start < self.gap_end
+	s.len()
+}
+struct ChunksByFn<'a> {
+	func: fn(&str) -> usize,
+	string: &'a str,
+	offset: usize,
+}
+impl<'a> Iterator for ChunksByFn<'a> {
+	type Item = Span;
+	fn next(&mut self) -> Option<Self::Item> {
+		if self.string[self.offset..].is_empty() {
+			return None;
+		}
+		let len = (self.func)(&self.string[self.offset..]);
+		let start = self.offset;
+		self.offset += len;
+		Some(Span {
+			end: self.offset,
+			start,
+		})
 	}
-	#[inline]
-	fn is_empty(&self) -> bool {
-		self.chars.as_str().is_empty()
+}
+impl<'a> ChunksByFn<'a> {
+	fn new(string: &'a str, func: fn(&str) -> usize) -> Self {
+		Self {
+			func,
+			string,
+			offset: 0,
+		}
 	}
 }

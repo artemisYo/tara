@@ -8,5 +8,5 @@ func fib(n: int) -> int {
 
 func main() {
     let foo = fib(5);
-    print("foo is: {}", foo);
+    print("\"foo\" is: {}", foo);
 }

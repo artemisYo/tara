@@ -9,7 +9,6 @@
     system = "x86_64-linux";
     pkgs = import nixpkgs { inherit system; };
   in {
-
     packages.${system} = {
       tara = pkgs.rustPlatform.buildRustPackage {
         pname = "tara";
@@ -19,8 +18,5 @@
       };
       default = self.packages.${system}.tara;
     };
-
-    # packages.x86_64-linux.default = self.packages.x86_64-linux.hello;
-
   };
 }
