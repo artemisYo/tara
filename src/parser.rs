@@ -15,6 +15,9 @@ struct Parser {
 	buffer: Vec<TreeNode>,
 }
 impl Parser {
+	fn with_scope<T: ViewBase>(&mut self, f: FnOnce(&mut Self, Validate<T>) -> T) -> T {
+		todo!();
+	}
 	// File = (&:func Func)* ε
 	fn file(&mut self, mut tt: TokenView) -> PRes {
 		while !tt.is_empty() {
