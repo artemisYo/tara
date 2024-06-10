@@ -14,15 +14,15 @@ impl BoolOpt for bool {
 }
 
 #[derive(Debug)]
-pub struct File(Vec<TreeNode>);
+pub struct File(pub Vec<TreeNode>);
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TreeNode {
 	size: usize,
 	kind: TreeKind
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum TreeKind {
 	Vec,
 	Pair,
@@ -35,6 +35,7 @@ pub enum TreeKind {
 	Name(usize),
 	Number(usize),
 	TreeString(usize),
+	#[default]
 	Void,
 }
 impl PartialEq for TreeKind {
@@ -77,7 +78,7 @@ impl File {
 trait ViewBase {
 	fn is_valid(_: &[TreeNode]) -> bool;
 }
-trait ValidatorBase {
+pub trait ValidatorBase {
 	type Args;
 	fn new() -> Self;
 }
@@ -91,45 +92,62 @@ impl<'a, T: ViewBase> View<'a, T> {
 	fn is_valid(&self) -> bool {
 		T::is_valid(self.0)
 	}
-	pub fn cast<V: View<'a, _>>(&self) -> Option<V> {
+	pub fn cast<V: ViewBase>(&self) -> Option<View<'a, V>> {
 		let out = V::new_at(self.0);
 		out.is_valid().opt()?;
 		Some(out)
 	}
 }
 
+// this is simple and good
+// I'm scared of the new tlist!
+//macro_rules! tlist {
+//	() => { () };
+//	( $head:tt $(,)? ) => { ($head, ()) };
+//	( $head:tt , $($tail:tt),+ $(,)? ) => {
+//		($head, tlist!($($tail),+) )
+//	};
+//}
 macro_rules! tlist {
 	() => { () };
-	( $head:tt $(,)? ) => { ($head, ()) };
-	( $head:tt , $($tail:tt),+ $(,)? ) => {
-		($head, tlist!($($tail),+) )
+	( $head:tt $(,)?) => { ( $head, () ) };
+	( $head:tt $(| $alt:tt)+ $(,)?) => {
+	    ( 
+	      tlist!($head, $($alt),+ ), 
+	      ()
+	    )
+	};
+	( $head:tt , $($tail:tt $(| $alt_tail:tt)*),+ $(,)?) => {
+	    ( 
+	      $head,
+	      tlist!($($tail $(| $alt_tail)*),+) 
+	    )
+	};
+	( $head:tt $(| $alt:tt)+ , $($tail:tt $(| $alt_tail:tt)*),+ $(,)?) => {
+	    ( 
+	      tlist!($head, $($alt),+ ), 
+	      tlist!($($tail $(| $alt_tail)*),+) 
+	    )
 	};
 }
 
-trait Naturals {}
+pub trait Naturals {}
 type Zero = ();
 type Succ<N> = (N, ());
 impl Naturals for Zero {}
 impl<N: Naturals> Naturals for Succ<N> {}
 
-trait List {
-	type Head; type Tail;
-}
-impl<T, U> List for (T, U) {
-	type Head = T; type Tail = U;
-}
+pub trait Find<T, N: Naturals> {}
+impl<T, U> Find<T, Zero> for (T, U) {}
+impl<F, N, T, U> Find<F, Succ<N>> for (T, U)
+where N: Naturals,
+      U: Find<F, N> {}
 
-trait Find<T, N: Natural> {}
-impl<T, U, L> Find<T, Zero> for L 
-where L: List<Head = T, Tail = U> {}
-impl<F, T, N: Natural, U: Find<F, N>, L> Find<F, Succ<N>> for L 
-where L: List<Head = T, Tail = U> {}
-
-type Cons<Head, Tail> = (Head, Tail);
 type Nil = ();
 pub struct Validator<T, Args>(PhantomData<(T, Args)>);
-impl<T, Head, Tail> Validator<T, Cons<Head, Tail>> {
-	pub fn apply(self, _: Head) -> Validator<T, Tail> {
+impl<T, Head, Tail> Validator<T, (Head, Tail)> {
+	pub fn apply<H, N: Naturals>(self, _: H) -> Validator<T, Tail>
+	where Head: Find<H, N> {
 		Validator(PhantomData)
 	}
 }
@@ -138,13 +156,15 @@ impl<T: ValidatorBase> Validator<T, T::Args> {
 		Validator(PhantomData)
 	}
 }
-impl<T: ValidatorBase> Validator<T, Nil> {
-	pub fn finish(self) -> T {
+impl<T, Head, Tail> Validator<T, (Head, Tail)>
+where T: ValidatorBase {
+	pub fn finish<N: Naturals>(self) -> T
+	where Head: Find<Nil, N> {
 		T::new()
 	}
 }
 
-struct VecBase<T>(PhantomData<T>);
+pub struct VecBase<T>(PhantomData<T>);
 pub type VecView<'a, T> = View<'a, VecBase<T>>;
 impl<T> ViewBase for Vec<T> {
 	fn is_valid(slice: &[TreeNode]) -> bool {
@@ -176,7 +196,7 @@ impl<'a, T> VecView<'a, T> {
 	}
 }
 
-struct PairBase<T, U>(PhantomData<(T, U)>);
+pub struct PairBase<T, U>(PhantomData<(T, U)>);
 pub type Pair<'a, T, U> = View<'a, PairBase<T, U>>;
 impl<T, U> ViewBase for PairBase<T, U> {
 	fn is_valid(slice: &[TreeNode]) -> bool {
@@ -188,21 +208,21 @@ impl<T, U> ValidatorBase for PairBase<T, U> {
 	fn new() -> Self { Self(PhantomData) }
 }
 impl<'a, T, U> Pair<'a, T, U> {
-	pub fn first(&self) -> View<'a, T> where T: TreeView {
+	pub fn first(&self) -> View<'a, T> where T: ViewBase {
 		View::new_at(&self.0[1..])
 	}
 	fn second_offset(&self) -> &'a [TreeNode] {
 		&self.0[1 + self.0[1].size..]
 	}
-	pub fn second(&self) -> View<'a, U> where U: TreeView {
+	pub fn second(&self) -> View<'a, U> where U: ViewBase {
 		View::new_at(self.second_offset())
 	}
 }
 
-type ParamsBase = VecBase<PairBase<NameBase, NameBase>>;
-pub type Params<'a> = VecView<'a, Pair<'a, Name, Name>>;
+pub type ParamsBase = VecBase<PairBase<NameBase, NameBase>>;
+pub type Params<'a> = VecView<'a, Pair<'a, Name<'a>, Name<'a>>>;
 struct FuncBase;
-pub type Func<'a> = View<'a, Func>;
+pub type Func<'a> = View<'a, FuncBase>;
 impl ViewBase for FuncBase {
 	fn is_valid(slice: &[TreeNode]) -> bool {
 		slice[0].kind == TreeKind::Func
@@ -212,7 +232,7 @@ impl ValidatorBase for FuncBase {
 	type Args = tlist!(
 		NameBase,
 		ParamsBase,
-		Option<NameBase>,
+		NameBase | VoidBase,
 		BlockBase,
 	);
 	fn new() -> Self { Self }
@@ -241,9 +261,9 @@ impl<'a> Func<'a> {
 	}
 }
 
-type StatementsBase = VecBase<StatementBase>;
+pub type StatementsBase = VecBase<StatementBase>;
 pub type Statements<'a> = VecView<'a, Statement<'a>>;
-struct BlockBase;
+pub struct BlockBase;
 pub type Block<'a> = View<'a, BlockBase>;
 impl ViewBase for BlockBase {
 	fn is_valid(slice: &[TreeNode]) -> bool {
@@ -251,7 +271,7 @@ impl ViewBase for BlockBase {
 	}
 }
 impl ValidatorBase for BlockBase {
-	type Args = tlist!(StatementsBase, Option<ExprBase>);
+	type Args = tlist!(StatementsBase, ExprBase | VoidBase);
 	fn new() -> Self { Self }
 }
 impl<'a> Block<'a> {
@@ -276,7 +296,7 @@ impl ViewBase for StatementBase {
 	}
 }
 impl ValidatorBase for StatementBase {
-	type Args = tlist!(Result<ExprBase, LetBase>);
+	type Args = tlist!(ExprBase | LetBase);
 	fn new() -> Self { Self }
 } 
 
@@ -288,6 +308,14 @@ impl ViewBase for ExprBase {
 	}
 }
 impl ValidatorBase for ExprBase {
+	type Args = tlist!(
+		NameBase |
+		NumberBase |
+		IfExprBase |
+		FunccallBase |
+		BiopExprBase |
+		TreeStringBase
+	);
 	fn new() -> Self { Self }
 }
 
@@ -299,6 +327,7 @@ impl ViewBase for LetBase {
 	}
 }
 impl ValidatorBase for LetBase {
+	type Args = tlist!(NameBase, ExprBase);
 	fn new() -> Self { Self }
 }
 impl<'a> Let<'a> {
@@ -318,6 +347,11 @@ impl ViewBase for IfExprBase {
 	}
 }
 impl ValidatorBase for IfExprBase {
+	type Args = tlist!(
+		ExprBase,
+		ExprBase,
+		ExprBase | VoidBase
+	);
 	fn new() -> Self { Self }
 }
 impl<'a> IfExpr<'a> {
@@ -349,6 +383,7 @@ impl ViewBase for BiopExprBase {
 	}
 }
 impl ValidatorBase for BiopExprBase {
+	type Args = tlist!(ExprBase, ExprBase);
 	fn new() -> Self { Self }
 }
 impl<'a> BiopExpr<'a> {
@@ -369,6 +404,7 @@ impl<'a> BiopExpr<'a> {
 	}
 }
 
+pub type ArgsBase = VecBase<ExprBase>;
 pub type Args<'a> = VecView<'a, Expr<'a>>;
 pub struct FunccallBase;
 pub type Funccall<'a> = View<'a, FunccallBase>;
@@ -389,6 +425,7 @@ impl ViewBase for FunccallBase {
 	}
 }
 impl ValidatorBase for FunccallBase {
+	type Args = tlist!(ExprBase, ArgsBase);
 	fn new() -> Self { Self }
 }
 
@@ -400,6 +437,7 @@ impl ViewBase for NameBase {
 	}
 }
 impl ValidatorBase for NameBase {
+	type Args = ();
 	fn new() -> Self { Self }
 }
 pub struct NumberBase;
@@ -410,6 +448,7 @@ impl ViewBase for NumberBase {
 	}
 }
 impl ValidatorBase for NumberBase {
+	type Args = ();
 	fn new() -> Self { Self }
 }
 pub struct TreeStringBase;
@@ -420,5 +459,8 @@ impl ViewBase for TreeStringBase {
 	}
 }
 impl ValidatorBase for TreeStringBase {
+	type Args = ();
 	fn new() -> Self { Self }
 }
+
+pub struct VoidBase;
