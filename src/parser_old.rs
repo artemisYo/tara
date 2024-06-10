@@ -1,118 +1,108 @@
 use crate::tokenizer::{TokenKind, TokenView, TokenNode};
-mod prism;
-pub use prism::*;
+
+type PRes<'a, T> = Option<(TokenView<'a>, T)>;
 
 pub fn parse(tt: TokenView) -> Option<File> {
-	let mut parser = Parser {
-		buffer: vec![],
-	};
-	parser.file(tt)?;
-	Some(File(parser.buffer))
+	parse_file(tt).map(|(_, f)| f)
+}
+	
+// File = (&:func Func)* ε
+#[derive(Debug)]
+pub struct File {
+	funcs: Vec<Func>,
+}
+fn parse_file(mut tt: TokenView) -> PRes<File> {
+	let mut funcs = vec![];
+	while !tt.is_empty() {
+		match tt.peek().unwrap().kind {
+			TokenKind::Func => {
+				let Some((rest, func)) = parse_func(tt)
+				else { break; };
+				funcs.push(func);
+				tt = rest;
+			},
+			_ => {}
+		}
+	}
+	if !tt.is_empty() { return None; }
+	Some((tt, File { funcs }))
 }
 
-type PRes<'a> = Option<TokenView<'a>>;
-struct Parser {
-	buffer: Vec<TreeNode>,
+// Func = :func :name :paren{Args} (:arrRight :name)? :brace{_}
+#[derive(Debug)]
+pub struct Func {
+	name: usize,
+	ret: Option<usize>,
+	args: Args,
+	body: Block,
 }
-impl Parser {
-	// File = (&:func Func)* ε
-	fn file(&mut self, mut tt: TokenView) -> PRes {
-		while !tt.is_empty() {
-			match tt.peek().unwrap().kind {
-				TokenKind::Func => {
-					let rest = self.func(tt)?;
-					tt = rest;
-				},
-				_ => todo!("error handling"),
-			}
-		}
-		tt.is_empty().opt()?;
-		Some(tt)
-	}
-	// Func = :func Name :paren{Params} (:arrRight Name)? :brace{Block}
-	fn func(&mut self, mut tt: TokenView) -> PRes {
-		tt.expect(TokenKind::Func)?;
-		let func = self.buffer.len();
-		self.buffer.push(TreeNode {
-			size: 0,
-			kind: TreeKind::Func,
-		});
-		let mut tt = self.name(tt)?;
-		self.params(tt.children_if(TokenKind::Paren(0))?)?;
+fn parse_func(mut tt: TokenView) -> PRes<Func> {
+	let _func = tt.expect(TokenKind::Func)?;
+	let name = tt.expect(TokenKind::Name(0))?.string_idx()?;
+	let (_, args) = parse_args(tt.children_if(TokenKind::Paren(0))?)?;
+	tt.next();
+	let ret = if tt.peek()?.kind == TokenKind::ArrRight {
 		tt.next();
-		if tt.peek()?.kind == TokenKind::ArrRight {
-			tt.next();
-			tt = self.name(tt)?;
-		} else {
-			self.buffer.push(TreeNode {
-				size: 1,
-				kind: TreeKind::Void,
-			});
-		}
-		self.block(tt.children_if(TokenKind::Brace(0))?)?;
-		tt.next();
-		self.buffer[func].size = self.buffer.len() - func;
-		Some(tt)
+		Some(tt.expect(TokenKind::Name(0))?.string_idx()?)
+	} else {
+		None
+	};
+	let (_, body) = parse_block(tt.children_if(TokenKind::Brace(0))?)?;
+	tt.next();
+	Some((tt, Func { name, ret, args, body }))
+}
+
+// Args = List(Decl, :comma, trailing = true, expect-ε = true)
+#[derive(Debug)]
+pub struct Args {
+	decls: Vec<Decl>
+}
+fn parse_args(tt: TokenView) -> PRes<Args> {
+	let (tt, decls) =
+		(parse_list::<true, true, _, _, _, _>(
+			parse_decl,
+			parse_token(TokenKind::Comma)
+		))(tt)?;
+	Some((tt, Args { decls }))
+}
+
+// Decl = :name :colon :name
+#[derive(Debug)]
+pub struct Decl {
+	name: usize,
+	typ: usize,
+}
+fn parse_decl(mut tt: TokenView) -> PRes<Decl> {
+	let name = tt.expect(TokenKind::Name(0))?.string_idx()?;
+	tt.expect(TokenKind::Colon)?;
+	let typ = tt.expect(TokenKind::Name(0))?.string_idx()?;
+	Some((tt, Decl { name, typ }))
+}
+
+// Block = (Statement :semi)* Expr? ε
+#[derive(Debug)]
+pub struct Block {
+	statements: Vec<Statement>,
+	tail: Option<Expr>,
+}
+fn parse_block(mut tt: TokenView) -> PRes<Block> {
+	let mut statements = vec![];
+	while !tt.is_empty() {
+		let Some((mut rest, statement)) = parse_statement(tt)
+		else { break; };
+		let Some(_) = rest.expect(TokenKind::Semi)
+		else { break; };
+		statements.push(statement);
+		tt = rest;
 	}
-	// Params = (Name :colon Name :comma)* (Name :colon Name)? ε
-	fn params(mut tt: TokenView) -> PRes {
-		let vec = self.buffer.len();
-		self.buffer.push(TreeNode {
-			size: 0,
-			kind: TreeKind::Vec,
-		});
-		while !tt.is_empty() {
-			self.buffer.push(TreeNode {
-				size: 2,
-				kind: TreeKind::Pair,
-			});
-			tt = self.name(tt)?;
-			tt.expect(TokenKind::Colon)?;
-			tt = self.name(tt)?;
-			if tt.peek()?.kind != TokenKind::Comma {
-				break;
-			}
-		}
-		tt.is_empty().opt()?;
-		self.buffer[vec].size = self.buffer.len() - vec;
-		Some(tt)
-	}
-	// Block = (Statement :semi)* Expr? ε
-	fn block(&mut self, mut tt: TokenView) -> PRes {
-		let vec = self.buffer.len();
-		self.buffer.push(TreeNode {
-			size: 0,
-			kind: TreeKind::Vec,
-		});
-		while !tt.is_empty() {
-			let size = self.buffer.len() - vec;
-			tt = self.statement(tt)?;
-			if tt.peek()?.kind == TokenKind::Semi {
-				tt.next();
-			} else {
-				self.buffer[vec].size = size;
-				break;
-			}
-		}
-		// if Expr? didn't happen
-		if self.buffer[vec].size == 0 {
-			self.buffer[vec].size = self.buffer.len() - vec;
-			self.buffer.push(TreeNode {
-				size: 1,
-				kind: TreeKind::Void,
-			});
-		}
-		tt.is_empty().opt()?;
-		Some(tt)
-	}
-	fn name(&mut self, mut tt: TokenView) -> PRes {
-		let name = tt.expect(TokenKind::Name(0))?.string_idx()?;
-		self.buffer.push(TreeNode {
-			size: 1,
-			kind: TreeKind::Name(name),
-		});
-		Some(tt)
-	}
+	let tail = if let Some((rest, expr)) = parse_expr(tt) {
+		tt = rest;
+		Some(expr)
+	} else {
+		None
+	};
+	parse_epsilon(tt)?;
+	Some((tt, Block { statements, tail }))
 }
 
 // Statement = (:let :name :eq Expr) / Expr
