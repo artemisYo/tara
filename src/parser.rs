@@ -10,25 +10,18 @@ pub fn parse(tt: TokenView) -> Option<File> {
 	Some(File(parser.buffer))
 }
 
+type PRes<'a, T> = Option<(TokenView<'a>, T)>;
+
 struct Parser {
 	buffer: Vec<TreeNode>,
 }
 impl Parser {
-	fn with_scope<T: ValidatorBase, A>(&mut self, f: impl FnOnce(&mut Self, Validator<T, A>) -> Option<(TreeKind, T)>) -> Option<T> {
-		let idx = self.buffer.len();
-		self.buffer.push(TreeNode::default());
-		let (kind, pow) = f(self, Validator::new())?;
-		let size = self.buffer.len() - idx;
-		self.buffer[idx].kind = kind;
-		self.buffer[idx].size = size;
-		Some(pow)
-	}
 	// File = (&:func Func)* ε
-	fn file(&mut self, mut tt: TokenView) -> Option<TokenView> {
+	fn file<'a>(&mut self, mut tt: TokenView<'a>) -> Option<TokenView<'a>> {
 		while !tt.is_empty() {
 			match tt.peek().unwrap().kind {
 				TokenKind::Func => {
-					let rest = self.func(tt)?;
+					let (rest, _) = self.func(tt)?;
 					tt = rest;
 				},
 				_ => todo!("error handling"),
@@ -38,53 +31,48 @@ impl Parser {
 		Some(tt)
 	}
 	// Func = :func Name :paren{Params} (:arrRight Name)? :brace{Block}
-	fn func(&mut self, mut tt: TokenView) -> Option<TokenView> {
-		self.with_scope(|this, validator| {
-			tt.expect(TokenKind::Func)?;
-			let (rest, validator) = this.name(tt, validator)?;
-			tt = rest;
-			let validator = this.params(
-				tt.children_if(TokenKind::Paren(0))?,
-				validator,
-			)?;
+	fn func<'a>(&mut self, mut tt: TokenView<'a>) -> PRes<'a, FuncBase> {
+		tt.expect(TokenKind::Func)?;
+		let scope = self.new_scope();
+		let (mut tt, scope) = self.with_scope(scope, Self::name, tt)?;
+		let (_, scope) = self.with_scope(
+			scope,
+			Self::params,
+			tt.children_if(TokenKind::Paren(0))?
+		)?;
+		tt.next();
+		let (mut tt, scope) = if tt.peek()?.kind == TokenKind::ArrRight {
 			tt.next();
-			let validator = if tt.peek()?.kind == TokenKind::ArrRight {
-				tt.next();
-				let (rest, validator) = this.name(tt, validator)?;
-				tt = rest;
-				validator
-			} else {
-				this.void(validator)
-			};
-			// block on children
-			// tt.next()
-			// return
-		});
+			self.with_scope(scope, Self::name, tt)?
+		} else {
+			self.with_scope(scope, Self::void, tt)?
+		};
+		let (_, scope) = self.with_scope(
+			scope,
+			Self::block,
+			tt.children_if(TokenKind::Brace(0))?
+		)?;
+		tt.next();
+		let pow = self.close_scope(scope, TreeKind::Func);
+		Some((tt, pow))
 	}
 	// Params = (Name :colon Name :comma)* (Name :colon Name)? ε
-	fn params<T, N: Naturals, Head, Tail>(
-		&mut self,
-		mut tt: TokenView,
-		to_validate: Validator<T, (Head, Tail)>
-	) -> Option<Validator<T, Tail>>
-	where Head: Find<ParamsBase, N> {
-		let pow_token = self.with_scope(|this, validator| {
-			while !tt.is_empty() {
-				let _ = this.with_scope(|this, validator| {
-					let (rest, validator) = this.name(tt, validator)?;
-					rest.expect(TokenKind::Colon)?;
-					let (rest, validator) = this.name(rest, validator)?;
-					tt = rest;
-					Some((TreeKind::Pair, validator.finish()))
-				})?;
-				if tt.peek()?.kind != TokenKind::Comma {
-					break;
-				}
+	fn params<'a>(&mut self, mut tt: TokenView<'a>) -> PRes<'a, ParamsBase> {
+		let scope = self.new_scope();
+		while !tt.is_empty() {
+			let pairscope = self.new_scope::<PairBase<NameBase, NameBase>>();
+			let (mut rest, pairscope) = self.with_scope(pairscope, Self::name, tt)?;
+			rest.expect(TokenKind::Colon)?;
+			let (rest, pairscope) = self.with_scope(pairscope, Self::name, rest)?;
+			tt = rest;
+			self.close_scope(pairscope, TreeKind::Pair);
+			if tt.peek()?.kind != TokenKind::Comma {
+				break;
 			}
-			tt.is_empty().opt()?;
-			Some((TreeKind::Vec, validator.finish()))
-		})?;
-		Some(to_validate.apply(pow_token))
+		}
+		tt.is_empty().opt()?;
+		let pow = self.close_scope(scope, TreeKind::Vec);
+		Some((tt, pow))
 	}
 	// Block = (Statement :semi)* Expr? ε
 	// fn block(&mut self, mut tt: TokenView) -> PRes {
@@ -106,7 +94,7 @@ impl Parser {
 	// 	// if Expr? didn't happen
 	// 	if self.buffer[vec].size == 0 {
 	// 		self.buffer[vec].size = self.buffer.len() - vec;
-	// 		self.buffer.push(TreeNode {
+	// 		self.buffer.push(TreeNode {Pair
 	// 			size: 1,
 	// 			kind: TreeKind::Void,
 	// 		});
@@ -114,40 +102,17 @@ impl Parser {
 	// 	tt.is_empty().opt()?;
 	// 	Some(tt)
 	// }
-	fn block<T, N: Naturals, Head, Tail>(
-		&mut self,
-		mut tt: TokenView,
-		to_validate: Validator<T, (Head, Tail)>,
-	) -> Option<(TokenView, Validator<T, Tail>)>
-	where Head: Find<BlockBase, N> {
-		let stmts_pow = self.with_scope(|this, validator| {
-			while !tt.is_empty() {
-				let (rest, validator) = this.statement(tt, validator);
-			}
-		})?;
+	fn block<'a>(&mut self, tt: TokenView<'a>) -> PRes<'a, BlockBase> {
+		todo!("block grammar is a bit yikes");
 	}
-	fn name<T, N: Naturals, Head, Tail>(
-		&mut self,
-		mut tt: TokenView,
-		to_validate: Validator<T, (Head, Tail)>
-	) -> Option<(TokenView, Validator<T, Tail>)>
-	where Head: Find<NameBase, N> {
-		let pow_token = self.with_scope(|this, validator| {
-			let name = tt.expect(TokenKind::Name(0))?.string_idx()?;
-			Some((TreeKind::Name(name), validator.finish()))
-		})?;
-		let valid = to_validate.apply(pow_token);
-		Some((tt, valid))
+	fn name<'a>(&mut self, mut tt: TokenView<'a>) -> PRes<'a, NameBase> {
+		let name = tt.expect(TokenKind::Name(0))?.string_idx()?;
+		let pow = self.push_name(name);
+		Some((tt, pow))
 	}
-	fn void<T, N: Naturals, Head, Tail>(
-		&mut self,
-		to_validate: Validator<T, (Head, Tail)>
-	) -> Validator<T, Tail>
-	where Head: Find<VoidBase, N> {
-		self.buffer.push(TreeNode {
-			size: 1, kind: TreeKind::Void,
-		});
-		to_validate.apply(VoidBase)
+	fn void<'a>(&mut self, tt: TokenView<'a>) -> PRes<'a, VoidBase> {
+		let pow = self.push_void();
+		Some((tt, pow))
 	}
 }
 

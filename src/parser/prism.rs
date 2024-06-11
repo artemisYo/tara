@@ -1,4 +1,6 @@
 use std::marker::PhantomData;
+use super::Parser;
+use crate::tokenizer::TokenView;
 
 pub trait BoolOpt {
 	fn opt(self) -> Option<()>;
@@ -93,7 +95,7 @@ impl<'a, T: ViewBase> View<'a, T> {
 		T::is_valid(self.0)
 	}
 	pub fn cast<V: ViewBase>(&self) -> Option<View<'a, V>> {
-		let out = V::new_at(self.0);
+		let out = View::new_at(self.0);
 		out.is_valid().opt()?;
 		Some(out)
 	}
@@ -138,6 +140,7 @@ impl Naturals for Zero {}
 impl<N: Naturals> Naturals for Succ<N> {}
 
 pub trait Find<T, N: Naturals> {}
+impl<T> Find<T, Zero> for T {}
 impl<T, U> Find<T, Zero> for (T, U) {}
 impl<F, N, T, U> Find<F, Succ<N>> for (T, U)
 where N: Naturals,
@@ -156,17 +159,72 @@ impl<T: ValidatorBase> Validator<T, T::Args> {
 		Validator(PhantomData)
 	}
 }
-impl<T, Head, Tail> Validator<T, (Head, Tail)>
+impl<T> Validator<T, ()>
 where T: ValidatorBase {
-	pub fn finish<N: Naturals>(self) -> T
-	where Head: Find<Nil, N> {
+	pub fn finish(self) -> T {
 		T::new()
+	}
+}
+
+pub struct Scope<T, Args> {
+	index: usize,
+	validator: Validator<T, Args>
+}
+impl<T, Head, Tail> Scope<T, (Head, Tail)> {
+	fn validate<P, N: Naturals>(self, p: P) -> Scope<T, Tail>
+	where Head: Find<P, N> {
+		let index = self.index;
+		let validator = self.validator.apply(p);
+		Scope { index, validator }
+	}
+}
+impl Parser {
+	pub fn push_name(&mut self, idx: usize) -> NameBase {
+		self.buffer.push(TreeNode {
+			size: 1, kind: TreeKind::Name(idx),
+		});
+		NameBase
+	}
+	pub fn push_void(&mut self) -> VoidBase {
+		self.buffer.push(TreeNode {
+			size: 1, kind: TreeKind::Void,
+		});
+		VoidBase
+	}
+	pub fn new_scope<T: ValidatorBase>(&mut self) -> Scope<T, T::Args> {
+		let index = self.buffer.len();
+		self.buffer.push(TreeNode::default());
+		Scope {
+			validator: Validator::new(),
+			index,
+		}
+	}
+	pub fn close_scope<T: ValidatorBase>(
+		&mut self,
+		scope: Scope<T, ()>,
+		kind: TreeKind
+	) -> T {
+		let size = self.buffer.len() - scope.index;
+		self.buffer[scope.index].size = size;
+		self.buffer[scope.index].kind = kind;
+		scope.validator.finish()
+	}
+	pub fn with_scope<'a, T, P, Head, Tail, N: Naturals>(
+		&mut self,
+		scope: Scope<T, (Head, Tail)>,
+		f: impl FnOnce(&mut Self, TokenView<'a>) -> Option<(TokenView<'a>, P)>,
+		tt: TokenView<'a>,
+	) -> Option<(TokenView<'a>, Scope<T, Tail>)>
+	where Head: Find<P, N> {
+		let (t, p) = f(self, tt)?;
+		let s = scope.validate(p);
+		Some((t, s))
 	}
 }
 
 pub struct VecBase<T>(PhantomData<T>);
 pub type VecView<'a, T> = View<'a, VecBase<T>>;
-impl<T> ViewBase for Vec<T> {
+impl<T> ViewBase for VecBase<T> {
 	fn is_valid(slice: &[TreeNode]) -> bool {
 		slice[0].kind == TreeKind::Vec
 	}
@@ -191,7 +249,8 @@ impl<'a, T> VecView<'a, T> {
 	}
 	// idx refers to the node number
 	// not to the idx in &[TreeNode]
-	pub fn get(&self, idx: usize) -> Option<View<'a, T>> {
+	pub fn get(&self, idx: usize) -> Option<View<'a, T>>
+	where T: ViewBase {
 		Some(View::new_at(self.get_offset(idx)?))
 	}
 }
@@ -221,7 +280,7 @@ impl<'a, T, U> Pair<'a, T, U> {
 
 pub type ParamsBase = VecBase<PairBase<NameBase, NameBase>>;
 pub type Params<'a> = VecView<'a, Pair<'a, Name<'a>, Name<'a>>>;
-struct FuncBase;
+pub struct FuncBase;
 pub type Func<'a> = View<'a, FuncBase>;
 impl ViewBase for FuncBase {
 	fn is_valid(slice: &[TreeNode]) -> bool {
@@ -254,7 +313,7 @@ impl<'a> Func<'a> {
 	}
 	fn body_offset(&self) -> &'a [TreeNode] {
 		let ret = self.ret_offset();
-		&ret[ret.size..]
+		&ret[ret[0].size..]
 	}
 	pub fn body(&self) -> Block<'a> {
 		View::new_at(self.body_offset())
@@ -379,7 +438,7 @@ pub struct BiopExprBase;
 pub type BiopExpr<'a> = View<'a, BiopExprBase>;
 impl ViewBase for BiopExprBase {
 	fn is_valid(slice: &[TreeNode]) -> bool {
-		slice[0].kind == TreeKind::BiopExpr
+		slice[0].kind == TreeKind::BiopExpr(Op::Less)
 	}
 }
 impl ValidatorBase for BiopExprBase {
