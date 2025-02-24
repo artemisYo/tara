@@ -66,7 +66,7 @@ impl<'src> LexerIter<'src> {
     fn strip_whitespace(&mut self) {
         let len = self
             .cursor()
-            .into_iter()
+            .iter()
             .take_while(|&&b| (b as char).is_ascii_whitespace())
             .count();
         self.offset += len;
@@ -78,7 +78,7 @@ impl<'src> LexerIter<'src> {
         if !text.starts_with(b"//") {
             return None;
         }
-        let len = text.into_iter().take_while(|&&b| b != b'\n').count() + 1;
+        let len = text.iter().take_while(|&&b| b != b'\n').count() + 1;
         self.offset += len;
         Some(Token {
             kind: Tokenkind::Comment,
@@ -90,7 +90,7 @@ impl<'src> LexerIter<'src> {
         })
     }
 
-    fn from_table(&mut self, t: &[(&[u8], Tokenkind)]) -> Option<Token<'src>> {
+    fn with_table(&mut self, t: &[(&[u8], Tokenkind)]) -> Option<Token<'src>> {
         let text = self.cursor();
         let start = self.offset;
         for (s, k) in t {
@@ -111,7 +111,7 @@ impl<'src> LexerIter<'src> {
     }
 
     fn immediates(&mut self) -> Option<Token<'src>> {
-        self.from_table(Self::IMMS)
+        self.with_table(Self::IMMS)
     }
 
     fn keywords(&mut self) -> Option<Token<'src>> {
@@ -131,13 +131,13 @@ impl<'src> LexerIter<'src> {
             LexerIter::mk_tk(Equals),
             LexerIter::mk_tk(Import),
         ];
-        self.from_table(TABLE)
+        self.with_table(TABLE)
     }
 
     fn bools(&mut self) -> Option<Token<'src>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[(b"true", Bool), (b"false", Bool)];
-        self.from_table(TABLE)
+        self.with_table(TABLE)
     }
 
     fn string(&mut self) -> Option<Token<'src>> {
@@ -172,7 +172,7 @@ impl<'src> LexerIter<'src> {
         let text = self.cursor();
         let start = self.offset;
         let len = text
-            .into_iter()
+            .iter()
             .take_while(|&&b| (b as char).is_ascii_digit())
             .count();
         self.offset += len;
@@ -193,7 +193,7 @@ impl<'src> LexerIter<'src> {
         let text = self.cursor();
         let start = self.offset;
         let len = text
-            .into_iter()
+            .iter()
             .take_while(|&&b| !is_word_break(b) || (b as char).is_ascii_digit())
             .count();
         self.offset += len;
@@ -221,7 +221,5 @@ fn is_word_break(b: u8) -> bool {
     if b == b'"' {
         return true;
     }
-    LexerIter::IMMS
-        .into_iter()
-        .any(|(s, _)| s.starts_with(&[b]))
+    LexerIter::IMMS.iter().any(|(s, _)| s.starts_with(&[b]))
 }

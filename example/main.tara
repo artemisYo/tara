@@ -1,0 +1,9 @@
+// this is a comment
+func main(): int {
+    let a-string = "this is a string";
+    // strings are also delimited by newlines
+    let another!string = "this is also a string
+        ;
+    let out = 5;
+    out
+}
