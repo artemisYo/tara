@@ -22,8 +22,8 @@ impl<'s> Provenance<'s> {
 			.map(|n| self.start+n)
 			.unwrap_or(self.source.len());
 		let pretext = &self.source[start..self.start];
-		let text = &self.source[self.start..self.end];
-		let posttext = &self.source[self.end..end];
+		let text = &self.source[self.start..self.end.min(end)];
+		let posttext = &self.source[self.end.min(end)..end];
 		println!("╭─[rprt]: at bytes [{}:{}]", self.start, self.end);
 		println!(
 			"│ {}{}{}{}{}{}",
@@ -40,9 +40,13 @@ impl<'s> Provenance<'s> {
 
 fn main() {
 	let mut input = String::new();
+	input += "// this is a comment\n";
 	input += "func main(): int {\n";
 	input += "    let a = 5;\n";
+	input += "    let s = \"this is a string\n";
+	input += "        ;\n";
 	input += "    a\n";
+	input += "    // and another comment\n";
 	input += "}";
 	println!("[cat]:\n{}", input);
 	
@@ -52,8 +56,6 @@ fn main() {
 	}
 
 	for t in lexer::LexerIter::new(&input) {
-		if t.kind == tokens::Tokenkind::Name {
-			t.loc.report();
-		}
+		t.loc.report();
 	}
 }

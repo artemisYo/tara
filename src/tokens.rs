@@ -65,7 +65,11 @@ impl Tokenkind {
 			Self::Operator => "operator",
 			Self::Equals => "=",
 			Self::Import => "import",
-			_ => return None,
+			Self::Bool |
+			Self::String |
+			Self::Number |
+			Self::Name |
+			Self::Comment => return None,
 		})
 	}
 }
