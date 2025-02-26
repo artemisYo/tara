@@ -1,6 +1,8 @@
+use std::fmt::Write;
 use std::num::NonZero;
 
 use crate::{
+    ansi::Style,
     tokens::{Token, Tokenkind},
     Module, ModuleId, Query, Tara,
 };
@@ -14,6 +16,30 @@ pub struct Opdef {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct OpsId(ModuleId);
+
+fn unexpected_token(src: &str, t: Token, exps: &[Tokenkind]) {
+    let title = if exps.len() == 1 {
+        format!(
+            "Expected '{}', but got '{}'!",
+            exps[0].spelling(),
+            t.kind.spelling()
+        )
+    } else {
+        let mut title = String::from("Expected one of ");
+        for e in &exps[1..] {
+            _ = write!(title, "'{}', ", e.spelling());
+        }
+        _ = write!(title, "but got '{}'!", t.kind.spelling());
+        title
+    };
+    t.loc.report(
+        src,
+        Style::red() | Style::underline(),
+        Style::red().apply("Error"),
+        &title,
+        &[],
+    );
+}
 
 pub struct Prescan<'tara> {
     module: &'tara mut Module,
@@ -55,11 +81,14 @@ impl Query for Prescan<'_> {
         let lexer = data.module.get_lexer();
         let lexer = lexer.filter(|t| t.kind != Comment);
         let mut lexer = lexer.peekable();
-        while let Some(t) = lexer.next() {
+        'outer: while let Some(t) = lexer.next() {
             match t.kind {
                 Import => {
                     let Some(part) = lexer.next_if(|t| t.kind == Name) else {
-                        todo!("Report error: expected @k, but got @t at @loc");
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Name]));
+                        continue 'outer;
                     };
                     let mut path = vec![data.interner.intern(part.text)];
                     while lexer
@@ -71,7 +100,10 @@ impl Query for Prescan<'_> {
                     {
                         let Some(part) = lexer.next_if(|t| t.kind == Name || t.kind == Ellipsis)
                         else {
-                            todo!("Report error: expected @k, but got @t at @loc");
+                            lexer.peek().map(|t| {
+                                unexpected_token(data.module.get_source(), *t, &[Name, Ellipsis])
+                            });
+                            continue 'outer;
                         };
                         path.push(data.interner.intern(part.text));
                         if part.kind == Ellipsis {
@@ -79,9 +111,12 @@ impl Query for Prescan<'_> {
                         }
                     }
                     imports.push(path);
-                    lexer
-                        .next_if(|t| t.kind == Semicolon)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
+                    if lexer.next_if(|t| t.kind == Semicolon).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Semicolon]));
+                        continue 'outer;
+                    }
                 }
 
                 String => {
@@ -106,32 +141,56 @@ impl Query for Prescan<'_> {
                 }
 
                 Operator => {
-                    lexer
-                        .next_if(|t| t.kind == OpenParen)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
+                    if lexer.next_if(|t| t.kind == OpenParen).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[OpenParen]));
+                        continue 'outer;
+                    }
                     let Some(lhs) = lexer.next_if(|t| t.kind == Number || t.kind == Underscore)
                     else {
-                        todo!("Report error: expected @k, but got @t at @loc");
+                        lexer.peek().map(|t| {
+                            unexpected_token(data.module.get_source(), *t, &[Number, Underscore])
+                        });
+                        continue 'outer;
                     };
-                    lexer
-                        .next_if(|t| t.kind == Comma)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
+                    if lexer.next_if(|t| t.kind == Comma).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Comma]));
+                        continue 'outer;
+                    }
                     let Some(name) = lexer.next_if(|t| t.kind == Name) else {
-                        todo!("Report error: expected @k, but got @t at @loc");
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Name]));
+                        continue 'outer;
                     };
-                    lexer
-                        .next_if(|t| t.kind == Comma)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
+                    if lexer.next_if(|t| t.kind == Comma).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Comma]));
+                        continue 'outer;
+                    }
                     let Some(rhs) = lexer.next_if(|t| t.kind == Number || t.kind == Underscore)
                     else {
-                        todo!("Report error: expected @k, but got @t at @loc");
+                        lexer.peek().map(|t| {
+                            unexpected_token(data.module.get_source(), *t, &[Number, Underscore])
+                        });
+                        continue 'outer;
                     };
-                    lexer
-                        .next_if(|t| t.kind == CloseParen)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
-                    lexer
-                        .next_if(|t| t.kind == Semicolon)
-                        .or_else(|| todo!("Report error: expected @k, but got @t at @loc"));
+                    if lexer.next_if(|t| t.kind == CloseParen).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[CloseParen]));
+                        continue 'outer;
+                    }
+                    if lexer.next_if(|t| t.kind == Semicolon).is_none() {
+                        lexer
+                            .peek()
+                            .map(|t| unexpected_token(data.module.get_source(), *t, &[Semicolon]));
+                        continue 'outer;
+                    }
                     let name = data.interner.intern(name.text);
                     let lbp = lhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);
                     let rbp = rhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);

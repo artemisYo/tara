@@ -1,18 +1,20 @@
-// this is a comment
-operator(_, !, 5);
+let an-str = "multiline strings can be done
+    "using consecutive newline-delimited ones.
+    operator "using an escape '\\' as the last character \
+    "in a line, removes the line break.
+    "normal escape sequences are\nalso\tsupported
+;
 
-import foo/...;
+operator;
 
 func main(): int {
-    let a-string = "this is a string";
-    let another!string =
-        "multiline strings can be done
-        "using consecutive newline-delimited \
-        "ones
-        "using an escape '\\' as the last character
-        "in a line, removes the line break
-    ;
+    let another!string = "this is a string";
     operator(3, &&, 4);
     let out = 5;
     out
 }
+
+// this is a comment
+operator(_, !, 5);
+
+import bar/; import foo/...;

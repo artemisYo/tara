@@ -41,8 +41,8 @@ pub enum Tokenkind {
 }
 
 impl Tokenkind {
-    pub const fn spelling(self) -> Option<&'static str> {
-        Some(match self {
+    pub const fn spelling(self) -> &'static str {
+        match self {
             Self::OpenParen => "(",
             Self::CloseParen => ")",
             Self::OpenBrace => "{",
@@ -68,7 +68,11 @@ impl Tokenkind {
             Self::Equals => "=",
             Self::Import => "import",
             Self::Underscore => "_",
-            Self::Bool | Self::String | Self::Number | Self::Name | Self::Comment => return None,
-        })
+            Self::Bool => "true | false",
+            Self::String => "string literal",
+            Self::Number => "number literal",
+            Self::Name => "ident",
+            Self::Comment => "comment",
+        }
     }
 }

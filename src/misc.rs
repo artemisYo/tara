@@ -37,21 +37,6 @@ impl<T: Iterator> From<T> for PeekN<T> {
     }
 }
 
-pub enum Ansi {
-    Underline,
-    Red,
-    Default,
-}
-impl std::fmt::Display for Ansi {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Ansi::Underline => write!(f, "\x1b[4m"),
-            Ansi::Red => write!(f, "\x1b[31m"),
-            Ansi::Default => write!(f, "\x1b[m"),
-        }
-    }
-}
-
 pub struct Ivec<I, T> {
     inner: Vec<T>,
     _p: PhantomData<I>,

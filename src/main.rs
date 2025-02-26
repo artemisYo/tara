@@ -1,3 +1,4 @@
+mod ansi;
 mod lexer;
 mod misc;
 mod prescan;
@@ -5,7 +6,8 @@ mod tokens;
 
 use std::path::Path;
 
-use misc::{Ansi, Indexer, Ivec};
+use ansi::*;
+use misc::{Indexer, Ivec};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Provenance {
@@ -20,32 +22,64 @@ impl Provenance {
             end: self.end.max(other.end),
         }
     }
-    pub fn report(&self, source: &str) {
+    pub fn report(
+        &self,
+        source: &str,
+        pointer: Style,
+        kind: StyledStr,
+        title: &str,
+        notes: &[&str],
+    ) {
         let Some(start) = source.get(..self.start) else {
             return;
         };
         let start = start.rfind("\n").map(|n| n + 1).unwrap_or(0);
-        let Some(end) = source.get(self.start..) else {
+        let Some(end) = source.get(self.end..) else {
             return;
         };
-        let end = end
-            .find("\n")
-            .map(|n| self.start + n)
-            .unwrap_or(source.len());
-        let pretext = &source[start..self.start];
-        let text = &source[self.start..self.end.min(end)];
-        let posttext = &source[self.end.min(end)..end];
-        println!("╭─[rprt]: at bytes [{}:{}]", self.start, self.end);
-        println!(
-            "│ {}{}{}{}{}{}",
-            pretext,
-            misc::Ansi::Red,
-            misc::Ansi::Underline,
-            text,
-            misc::Ansi::Default,
-            posttext
-        );
-        println!("╰───");
+        let end = end.find("\n").map(|n| self.end + n).unwrap_or(source.len());
+        let text = &source[start..end];
+
+        let digits = start.checked_ilog10().unwrap_or(0) + 1;
+        let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
+        let digits = digits as usize;
+        println!("╭─[{}]@b{}: {}", kind, self.start, title);
+        for (start, line) in text.lines().scan(start, |c, l| {
+            let start = *c;
+            *c += l.len();
+            Some((start, l))
+        }) {
+            let hl_start = self.start.saturating_sub(start);
+            let hl_end = self.end.saturating_sub(start).min(line.len());
+            let pretext = &line[0..hl_start];
+            let text = &line[hl_start..hl_end];
+            let posttext = &line[hl_end..];
+            println!(
+                "│ {:digits$} │ {}{}{}",
+                start,
+                Style::default().apply(pretext),
+                pointer.apply(text),
+                Style::default().apply(posttext)
+            );
+        }
+        if notes.len() > 0 {
+            println!("├─[{}Notes{}]:", Style::yellow(), Style::default());
+            for n in notes {
+                let mut lines = n.lines();
+                let Some(first) = lines.next() else {
+                    continue;
+                };
+                println!("│ - {}", first);
+                for l in lines {
+                    println!("│   {}", l);
+                }
+            }
+        }
+        print!("╰──");
+        for _ in 0..digits {
+            print!("─");
+        }
+        println!("╯");
     }
 }
 
@@ -140,8 +174,8 @@ impl Module {
             Err(e) => {
                 println!(
                     "[{}Error{}]: Module directory {:?} exists, but is not readable!",
-                    Ansi::Red,
-                    Ansi::Default,
+                    Color::Red,
+                    Style::default(),
                     dir
                 );
                 println!("| {}", e);
@@ -166,8 +200,8 @@ impl Module {
         if !ppath.exists() {
             println!(
                 "[{}Error{}]: Attempted to read nonexistent file {:?}!",
-                Ansi::Red,
-                Ansi::Default,
+                Style::red(),
+                Style::default(),
                 &path
             );
             std::process::exit(1);
@@ -184,8 +218,8 @@ impl Module {
             Err(e) => {
                 println!(
                     "[{}Error{}]: An error occurred while trying to read file {:?}!",
-                    Ansi::Red,
-                    Ansi::Default,
+                    Style::red(),
+                    Style::default(),
                     &path
                 );
                 println!("| {}", e);
@@ -205,32 +239,47 @@ impl Module {
 
 fn main() {
     let mut ctx = Tara::from("example/main.tara");
-    println!("[cat]:");
-    println!("{}", ctx.get_source(ctx.entry));
-
-    println!("[lex]:");
-    for t in ctx.get_module(ctx.entry).get_lexer() {
-        println!("{:?}", t);
+    Provenance {
+        start: 0,
+        end: ctx.get_source(ctx.entry).len(),
     }
+    .report(
+        ctx.get_source(ctx.entry),
+        Style::default(),
+        Style::yellow().apply("Cat"),
+        "",
+        &[],
+    );
+    // println!("{}", ctx.get_source(ctx.entry));
 
-    println!("[rep]:");
-    for t in ctx.get_module(ctx.entry).get_lexer().step_by(5).take(5) {
-        t.loc.report(ctx.get_source(ctx.entry));
-    }
+    // println!("[lex]:");
+    // for t in ctx.get_module(ctx.entry).get_lexer() {
+    //     println!("{:?}", t);
+    // }
 
     let ops = ctx.get_query::<prescan::Prescan>(ctx.entry);
-    println!("[scan rep]:");
-    for t in &ctx.query::<prescan::Prescan>(ops).0 {
-        println!("{:?}", t);
-    }
+    // println!("[scan]:");
+    // for t in &ctx.query::<prescan::Prescan>(ops).0 {
+    //     println!("{:?}", t);
+    // }
 
-    println!("[ops]:");
-    for o in &ctx.query::<prescan::Prescan>(ops).1 {
-        println!("{:?}", o);
-    }
+    // println!("[scan rep]:");
+    // for t in &ctx.query::<prescan::Prescan>(ops).0 {
+    //     t.loc.report(
+    //         ctx.get_source(ctx.entry),
+    //         Style::cyan().apply("Report"),
+    //         "current token is:",
+    //         &[],
+    //     );
+    // }
 
-    println!("[imports]:");
-    for o in &ctx.query::<prescan::Prescan>(ops).2 {
-        println!("{:?}", o);
-    }
+    // println!("[ops]:");
+    // for o in &ctx.query::<prescan::Prescan>(ops).1 {
+    //     println!("{:?}", o);
+    // }
+
+    // println!("[imports]:");
+    // for o in &ctx.query::<prescan::Prescan>(ops).2 {
+    //     println!("{:?}", o);
+    // }
 }

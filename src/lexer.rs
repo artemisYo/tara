@@ -40,7 +40,7 @@ impl<'src> Iterator for Lexer<'src> {
 
 impl<'src> Lexer<'src> {
     const fn mk_tk(t: Tokenkind) -> (&'static [u8], Tokenkind) {
-        (t.spelling().unwrap().as_bytes(), t)
+        (t.spelling().as_bytes(), t)
     }
     const IMMS: &'static [(&'static [u8], Tokenkind)] = {
         use Tokenkind::*;
