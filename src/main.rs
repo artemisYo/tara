@@ -62,7 +62,7 @@ impl Provenance {
                 Style::default().apply(posttext)
             );
         }
-        if notes.len() > 0 {
+        if !notes.is_empty() {
             println!("├─[{}Notes{}]:", Style::yellow(), Style::default());
             for n in notes {
                 let mut lines = n.lines();

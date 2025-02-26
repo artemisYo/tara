@@ -6,7 +6,7 @@ impl std::fmt::Display for StyledStr<'_> {
     }
 }
 impl Style {
-    pub fn apply<'a>(self, t: &'a str) -> StyledStr<'a> {
+    pub fn apply(self, t: &str) -> StyledStr<'_> {
         StyledStr(self, t)
     }
 }
