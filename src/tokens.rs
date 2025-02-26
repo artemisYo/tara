@@ -4,7 +4,7 @@ use crate::Provenance;
 pub struct Token<'s> {
     pub kind: Tokenkind,
     pub loc: Provenance,
-	pub text: &'s str,
+    pub text: &'s str,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tokenkind {
@@ -33,7 +33,7 @@ pub enum Tokenkind {
     Operator,
     Equals,
     Import,
-	Underscore,
+    Underscore,
     Bool,
     String,
     Number,
@@ -67,7 +67,7 @@ impl Tokenkind {
             Self::Operator => "operator",
             Self::Equals => "=",
             Self::Import => "import",
-			Self::Underscore => "_",
+            Self::Underscore => "_",
             Self::Bool | Self::String | Self::Number | Self::Name | Self::Comment => return None,
         })
     }

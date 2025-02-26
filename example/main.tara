@@ -1,9 +1,18 @@
 // this is a comment
+operator(_, !, 5);
+
+import foo/...;
+
 func main(): int {
     let a-string = "this is a string";
-    // strings are also delimited by newlines
-    let another!string = "this is also a string
-        ;
+    let another!string =
+        "multiline strings can be done
+        "using consecutive newline-delimited \
+        "ones
+        "using an escape '\\' as the last character
+        "in a line, removes the line break
+    ;
+    operator(3, &&, 4);
     let out = 5;
     out
 }

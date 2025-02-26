@@ -3,7 +3,7 @@ use crate::Provenance;
 
 impl<'src> From<&'src str> for Lexer<'src> {
     fn from(value: &'src str) -> Self {
-        Lexer::new(value).into()
+        Lexer::new(value)
     }
 }
 
@@ -80,10 +80,10 @@ impl<'src> Lexer<'src> {
         self.offset += len;
         Some(Token {
             kind: Tokenkind::Comment,
+            text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
                 start,
                 end: self.offset,
-                source: std::str::from_utf8(self.source).unwrap(),
             },
         })
     }
@@ -100,8 +100,8 @@ impl<'src> Lexer<'src> {
                 loc: Provenance {
                     start,
                     end: self.offset,
-                    source: std::str::from_utf8(self.source).unwrap(),
                 },
+                text: std::str::from_utf8(&text[..s.len()]).unwrap(),
                 kind: *k,
             });
         }
@@ -128,7 +128,7 @@ impl<'src> Lexer<'src> {
             Lexer::mk_tk(Operator),
             Lexer::mk_tk(Equals),
             Lexer::mk_tk(Import),
-			Lexer::mk_tk(Underscore),
+            Lexer::mk_tk(Underscore),
         ];
         self.with_table(TABLE)
     }
@@ -159,10 +159,10 @@ impl<'src> Lexer<'src> {
         self.offset += len;
         Some(Token {
             kind: Tokenkind::String,
+            text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
                 start,
                 end: self.offset,
-                source: std::str::from_utf8(self.source).unwrap(),
             },
         })
     }
@@ -180,10 +180,10 @@ impl<'src> Lexer<'src> {
         }
         Some(Token {
             kind: Tokenkind::Number,
+            text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
                 start,
                 end: self.offset,
-                source: std::str::from_utf8(self.source).unwrap(),
             },
         })
     }
@@ -201,10 +201,10 @@ impl<'src> Lexer<'src> {
         }
         Some(Token {
             kind: Tokenkind::Name,
+            text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
                 start,
                 end: self.offset,
-                source: std::str::from_utf8(self.source).unwrap(),
             },
         })
     }

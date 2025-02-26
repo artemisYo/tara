@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::{collections::BTreeSet, marker::PhantomData};
 
 pub struct PeekN<T: Iterator> {
     iter: T,
@@ -112,9 +112,9 @@ impl<I: Indexer, T> std::ops::IndexMut<(I, I)> for Ivec<I, T> {
 
 #[macro_export]
 macro_rules! MkIndexer {
-    ($name:ident, $base:ty) => {
+    ($v:vis $name:ident, $base:ty) => {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        struct $name($base);
+        $v struct $name($base);
         impl From<usize> for $name {
             fn from(value: usize) -> Self {
                 let Ok(value): Result<$base, _> = value.try_into() else {
@@ -138,31 +138,16 @@ macro_rules! MkIndexer {
 
 #[derive(Default)]
 pub struct Interner {
-	map: BTreeMap<&'static str, Istr>,
+    map: BTreeSet<&'static str>,
 }
 impl Interner {
-	pub fn intern(&mut self, s: &str) -> Istr {
-		if let Some(o) = self.map.get(s) {
-			return *o;
-		}
-		let i: Box<str> = s.into();
-		let i = Box::leak(i);
-		self.map.insert(i, Istr(i));
-		Istr(i)
-	}
-}
-
-#[derive(Debug, Eq, Clone, Copy)]
-pub struct Istr(&'static str);
-impl PartialEq for Istr {
-    fn eq(&self, other: &Self) -> bool {
-		std::ptr::eq(self.0, other.0)
-    }
-}
-impl std::ops::Deref for Istr {
-    type Target = &'static str;
-
-    fn deref(&self) -> &Self::Target {
-		&self.0
+    pub fn intern(&mut self, s: &str) -> &'static str {
+        if let Some(o) = self.map.get(s) {
+            return o;
+        }
+        let i: Box<str> = s.into();
+        let i = Box::leak(i);
+        self.map.insert(i);
+        i
     }
 }

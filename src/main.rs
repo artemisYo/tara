@@ -1,7 +1,3 @@
-#![allow(dead_code)]
-// ^ only temporary, as the code is getting developed
-// should be removed soon
-
 mod lexer;
 mod misc;
 mod prescan;
@@ -9,9 +5,7 @@ mod tokens;
 
 use std::path::Path;
 
-use misc::{Ansi, Ivec, Indexer, Istr};
-use tokens::Token;
-use prescan::{Opdef, OpsId};
+use misc::{Ansi, Indexer, Ivec};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Provenance {
@@ -20,13 +14,22 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    pub fn meet(&self, other: &Self) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
     pub fn report(&self, source: &str) {
-		let Some(start) = source.get(..self.start) else { return; };
-        let start = start.rfind("\n")
-			.map(|n| n + 1)
-            .unwrap_or(0);
-		let Some(end) = source.get(self.start..) else { return; };
-		let end = end.find("\n")
+        let Some(start) = source.get(..self.start) else {
+            return;
+        };
+        let start = start.rfind("\n").map(|n| n + 1).unwrap_or(0);
+        let Some(end) = source.get(self.start..) else {
+            return;
+        };
+        let end = end
+            .find("\n")
             .map(|n| self.start + n)
             .unwrap_or(source.len());
         let pretext = &source[start..self.start];
@@ -46,54 +49,33 @@ impl Provenance {
     }
 }
 
-// basically view types as per niko matsakis
-struct ModuleAccess<'tara> {
-	pub entry: ModuleId,
-	modules: &'tara mut Ivec<ModuleId, Module>,
-}
-impl ModuleAccess<'_> {
-	pub fn get_source(&self, m: ModuleId) -> &str {
-		let module = &self.modules[m];
-		module.source.as_ref()
-	}
-	pub fn get_lexer(&self, m: ModuleId) -> impl Iterator<Item = Token<'_>> {
-		let source = self.get_source(m);
-		lexer::Lexer::new(source)
-	}
+pub trait Query: Sized {
+    type Input: Copy;
+    type Output;
+    type Data<'a>;
+    type Id;
+
+    fn get(_: &Tara, _: Self::Id) -> &Self::Output;
+    fn check(_: &mut Tara, _: Self::Input) -> Result<Self::Id, Self::Data<'_>>;
+    fn run(_: Self::Data<'_>) -> Self::Output;
+    // stores the query result, preferably without changing `Output`
+    fn finish(_: &mut Tara, _: Self::Input, _: Self::Output) -> Self::Id;
 }
 
-struct InternAccess<'tara> {
-	interner: &'tara mut misc::Interner,
-}
-impl InternAccess<'_> {
-	pub fn intern(&mut self, s: &str) -> Istr {
-		self.interner.intern(s)
-	}
-}
-
-struct Tara {
+pub struct Tara {
     pub entry: ModuleId,
-	interner: misc::Interner,
+    interner: misc::Interner,
     modules: Ivec<ModuleId, Module>,
 }
-
 impl Tara {
-	pub fn split_for_prescan<'tara>(&'tara mut self) -> (ModuleAccess<'tara>, InternAccess<'tara>) {
-		let entry = self.entry;
-		let modules = &mut self.modules;
-		let interner = &mut self.interner;
-		(
-			ModuleAccess { entry, modules },
-			InternAccess { interner }
-		)
-	}
-	pub fn intern(&mut self, s: &str) -> Istr {
-		self.interner.intern(s)
-	}
     pub fn from(main: &str) -> Self {
         let mut modules = Ivec::default();
         let entry = modules.push(Module::from_file(main).expect("TODO: gut error message"));
-        Self { modules, entry, interner: Default::default() }
+        Self {
+            modules,
+            entry,
+            interner: Default::default(),
+        }
     }
     pub fn print_modules(&self) {
         self.print_submodule(&self.modules[self.entry], 0);
@@ -121,44 +103,30 @@ impl Tara {
         self.modules[m].children = Some(cs);
         self.get_children(m)
     }
-	pub fn get_source(&self, m: ModuleId) -> &str {
-		self.get_module(m).get_source()
-	}
-	pub fn get_lexer<'a>(&'a self, m: ModuleId) -> impl Iterator<Item = Token<'a>> {
-		let source = self.get_source(m);
-		lexer::Lexer::new(source)
-	}
-	pub fn place_ops(&mut self, m: ModuleId, ops: Box<[Opdef]>) {
-		assert!(self.get_module(m).ops.is_none());
-		self.modules[m].ops = Some(ops);
-	}
-	pub fn place_tokens(&mut self, m: ModuleId, tokens: Box<[Token<'static>]>) {
-		assert!(self.get_module(m).tokens.is_none());
-		self.modules[m].tokens = Some(tokens);
-	}
-	pub fn set_ops(&mut self, m: ModuleId) -> OpsId {
-		if self.get_module(m).ops.is_some() {
-			return OpsId::assume(m);
-		}
-		prescan::prescan(self, m)
-	}
-	pub fn get_ops(&self, m: OpsId) -> &[Opdef] {
-		self.get_module(m.module())
-			.ops
-			.as_ref()
-			.expect("OpsId should signal that prescan was already run")
-	}
+    pub fn get_source(&self, m: ModuleId) -> &str {
+        self.get_module(m).get_source()
+    }
+    pub fn get_query<Q: Query>(&mut self, i: Q::Input) -> Q::Id {
+        Q::check(self, i)
+            .map_err(|e| Q::run(e))
+            .unwrap_or_else(|o| Q::finish(self, i, o))
+    }
+    pub fn query<Q: Query>(&self, i: Q::Id) -> &Q::Output {
+        Q::get(self, i)
+    }
 }
 
-MkIndexer!(ModuleId, u32);
-struct Module {
+MkIndexer!(pub ModuleId, u32);
+pub struct Module {
     source: Box<str>,
     path: Box<str>,
     children: Option<(ModuleId, ModuleId)>,
-	ops: Option<Box<[Opdef]>>,
-	tokens: Option<Box<[Token<'static>]>>
+    prescan: Option<<prescan::Prescan<'static> as Query>::Output>,
 }
 impl Module {
+    pub fn get_lexer(&self) -> lexer::Lexer {
+        lexer::Lexer::new(&self.source)
+    }
     pub fn get_source(&self) -> &str {
         &self.source
     }
@@ -230,30 +198,39 @@ impl Module {
             source,
             path: Box::from(path),
             children: None,
-			ops: None,
-			tokens: None,
+            prescan: None,
         })
     }
 }
 
 fn main() {
-    let mut ctx = Tara::from("examples/main.tara");
+    let mut ctx = Tara::from("example/main.tara");
     println!("[cat]:");
     println!("{}", ctx.get_source(ctx.entry));
 
     println!("[lex]:");
-	for t in ctx.get_lexer(ctx.entry) {
+    for t in ctx.get_module(ctx.entry).get_lexer() {
         println!("{:?}", t);
     }
 
-	println!("[rep]:");
-	for t in ctx.get_lexer(ctx.entry) {
+    println!("[rep]:");
+    for t in ctx.get_module(ctx.entry).get_lexer().step_by(5).take(5) {
         t.loc.report(ctx.get_source(ctx.entry));
     }
-	
-	println!("[ops]:");
-	let ops = ctx.set_ops(ctx.entry);
-	for o in ctx.get_ops(ops) {
-		println!("{:?}", o);
-	}
+
+    let ops = ctx.get_query::<prescan::Prescan>(ctx.entry);
+    println!("[scan rep]:");
+    for t in &ctx.query::<prescan::Prescan>(ops).0 {
+        println!("{:?}", t);
+    }
+
+    println!("[ops]:");
+    for o in &ctx.query::<prescan::Prescan>(ops).1 {
+        println!("{:?}", o);
+    }
+
+    println!("[imports]:");
+    for o in &ctx.query::<prescan::Prescan>(ops).2 {
+        println!("{:?}", o);
+    }
 }
