@@ -1,19 +1,17 @@
 use crate::tokens::*;
 use crate::Provenance;
 
-pub type Lexer<'src> = crate::misc::PeekN<LexerIter<'src>>;
-
 impl<'src> From<&'src str> for Lexer<'src> {
     fn from(value: &'src str) -> Self {
-        LexerIter::new(value).into()
+        Lexer::new(value).into()
     }
 }
 
-pub struct LexerIter<'src> {
+pub struct Lexer<'src> {
     source: &'src [u8],
     offset: usize,
 }
-impl<'src> LexerIter<'src> {
+impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             source: source.as_bytes(),
@@ -22,7 +20,7 @@ impl<'src> LexerIter<'src> {
     }
 }
 
-impl<'src> Iterator for LexerIter<'src> {
+impl<'src> Iterator for Lexer<'src> {
     type Item = Token<'src>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -40,7 +38,7 @@ impl<'src> Iterator for LexerIter<'src> {
     }
 }
 
-impl<'src> LexerIter<'src> {
+impl<'src> Lexer<'src> {
     const fn mk_tk(t: Tokenkind) -> (&'static [u8], Tokenkind) {
         (t.spelling().unwrap().as_bytes(), t)
     }
@@ -117,19 +115,20 @@ impl<'src> LexerIter<'src> {
     fn keywords(&mut self) -> Option<Token<'src>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[
-            LexerIter::mk_tk(Func),
-            LexerIter::mk_tk(Return),
-            LexerIter::mk_tk(Loop),
-            LexerIter::mk_tk(Break),
-            LexerIter::mk_tk(If),
-            LexerIter::mk_tk(Else),
-            LexerIter::mk_tk(Let),
-            LexerIter::mk_tk(Mut),
-            LexerIter::mk_tk(Type),
-            LexerIter::mk_tk(As),
-            LexerIter::mk_tk(Operator),
-            LexerIter::mk_tk(Equals),
-            LexerIter::mk_tk(Import),
+            Lexer::mk_tk(Func),
+            Lexer::mk_tk(Return),
+            Lexer::mk_tk(Loop),
+            Lexer::mk_tk(Break),
+            Lexer::mk_tk(If),
+            Lexer::mk_tk(Else),
+            Lexer::mk_tk(Let),
+            Lexer::mk_tk(Mut),
+            Lexer::mk_tk(Type),
+            Lexer::mk_tk(As),
+            Lexer::mk_tk(Operator),
+            Lexer::mk_tk(Equals),
+            Lexer::mk_tk(Import),
+			Lexer::mk_tk(Underscore),
         ];
         self.with_table(TABLE)
     }
@@ -221,5 +220,5 @@ fn is_word_break(b: u8) -> bool {
     if b == b'"' {
         return true;
     }
-    LexerIter::IMMS.iter().any(|(s, _)| s.starts_with(&[b]))
+    Lexer::IMMS.iter().any(|(s, _)| s.starts_with(&[b]))
 }

@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{collections::BTreeMap, marker::PhantomData};
 
 pub struct PeekN<T: Iterator> {
     iter: T,
@@ -52,11 +52,11 @@ impl std::fmt::Display for Ansi {
     }
 }
 
-pub struct IVec<I, T> {
+pub struct Ivec<I, T> {
     inner: Vec<T>,
     _p: PhantomData<I>,
 }
-impl<I: Indexer, T> IVec<I, T> {
+impl<I: Indexer, T> Ivec<I, T> {
     pub fn push(&mut self, value: T) -> I {
         let index = I::from(self.inner.len());
         self.inner.push(value);
@@ -69,7 +69,7 @@ impl<I: Indexer, T> IVec<I, T> {
         (start, end)
     }
 }
-impl<I, T> Default for IVec<I, T> {
+impl<I, T> Default for Ivec<I, T> {
     fn default() -> Self {
         Self {
             inner: Vec::default(),
@@ -79,7 +79,7 @@ impl<I, T> Default for IVec<I, T> {
 }
 
 pub trait Indexer: From<usize> + Into<usize> {}
-impl<I: Indexer, T> std::ops::Index<I> for IVec<I, T> {
+impl<I: Indexer, T> std::ops::Index<I> for Ivec<I, T> {
     type Output = T;
 
     fn index(&self, index: I) -> &Self::Output {
@@ -87,13 +87,13 @@ impl<I: Indexer, T> std::ops::Index<I> for IVec<I, T> {
         &self.inner[index]
     }
 }
-impl<I: Indexer, T> std::ops::IndexMut<I> for IVec<I, T> {
+impl<I: Indexer, T> std::ops::IndexMut<I> for Ivec<I, T> {
     fn index_mut(&mut self, index: I) -> &mut Self::Output {
         let index = index.into();
         &mut self.inner[index]
     }
 }
-impl<I: Indexer, T> std::ops::Index<(I, I)> for IVec<I, T> {
+impl<I: Indexer, T> std::ops::Index<(I, I)> for Ivec<I, T> {
     type Output = [T];
 
     fn index(&self, index: (I, I)) -> &Self::Output {
@@ -102,7 +102,7 @@ impl<I: Indexer, T> std::ops::Index<(I, I)> for IVec<I, T> {
         &self.inner[start..end]
     }
 }
-impl<I: Indexer, T> std::ops::IndexMut<(I, I)> for IVec<I, T> {
+impl<I: Indexer, T> std::ops::IndexMut<(I, I)> for Ivec<I, T> {
     fn index_mut(&mut self, index: (I, I)) -> &mut Self::Output {
         let (start, end) = index;
         let (start, end) = (start.into(), end.into());
@@ -134,4 +134,35 @@ macro_rules! MkIndexer {
         }
         impl Indexer for $name {}
     };
+}
+
+#[derive(Default)]
+pub struct Interner {
+	map: BTreeMap<&'static str, Istr>,
+}
+impl Interner {
+	pub fn intern(&mut self, s: &str) -> Istr {
+		if let Some(o) = self.map.get(s) {
+			return *o;
+		}
+		let i: Box<str> = s.into();
+		let i = Box::leak(i);
+		self.map.insert(i, Istr(i));
+		Istr(i)
+	}
+}
+
+#[derive(Debug, Eq, Clone, Copy)]
+pub struct Istr(&'static str);
+impl PartialEq for Istr {
+    fn eq(&self, other: &Self) -> bool {
+		std::ptr::eq(self.0, other.0)
+    }
+}
+impl std::ops::Deref for Istr {
+    type Target = &'static str;
+
+    fn deref(&self) -> &Self::Target {
+		&self.0
+    }
 }
