@@ -26,7 +26,7 @@ fn unexpected_token(src: &str, t: Token, exps: &[Tokenkind]) {
         )
     } else {
         let mut title = String::from("Expected one of ");
-        for e in &exps[1..] {
+        for e in &exps[0..] {
             _ = write!(title, "'{}', ", e.spelling());
         }
         _ = write!(title, "but got '{}'!", t.kind.spelling());
