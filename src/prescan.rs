@@ -17,7 +17,7 @@ pub struct Opdef {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct OpsId(ModuleId);
 
-fn unexpected_token(src: &str, t: Token, exps: &[Tokenkind]) {
+fn unexpected_token(source: &Module, t: Token, exps: &[Tokenkind]) {
     let title = if exps.len() == 1 {
         format!(
             "Expected '{}', but got '{}'!",
@@ -33,7 +33,7 @@ fn unexpected_token(src: &str, t: Token, exps: &[Tokenkind]) {
         title
     };
     t.loc.report(
-        src,
+        source,
         Style::red() | Style::underline(),
         Style::red().apply("Error"),
         &title,
@@ -86,7 +86,7 @@ impl Query for Prescan<'_> {
                 Import => {
                     let Some(part) = lexer.next_if(|t| t.kind == Name) else {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Name])
+                            unexpected_token(&data.module, *t, &[Name])
                         }
                         continue 'outer;
                     };
@@ -101,7 +101,7 @@ impl Query for Prescan<'_> {
                         let Some(part) = lexer.next_if(|t| t.kind == Name || t.kind == Ellipsis)
                         else {
                             if let Some(t) = lexer.peek() {
-                                unexpected_token(data.module.get_source(), *t, &[Name, Ellipsis])
+                                unexpected_token(data.module, *t, &[Name, Ellipsis])
                             }
                             continue 'outer;
                         };
@@ -113,7 +113,7 @@ impl Query for Prescan<'_> {
                     imports.push(path);
                     if lexer.next_if(|t| t.kind == Semicolon).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Semicolon])
+                            unexpected_token(data.module, *t, &[Semicolon])
                         }
                         continue 'outer;
                     }
@@ -143,51 +143,51 @@ impl Query for Prescan<'_> {
                 Operator => {
                     if lexer.next_if(|t| t.kind == OpenParen).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[OpenParen])
+                            unexpected_token(data.module, *t, &[OpenParen])
                         }
                         continue 'outer;
                     }
                     let Some(lhs) = lexer.next_if(|t| t.kind == Number || t.kind == Underscore)
                     else {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Number, Underscore])
+                            unexpected_token(data.module, *t, &[Number, Underscore])
                         }
                         continue 'outer;
                     };
                     if lexer.next_if(|t| t.kind == Comma).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Comma])
+                            unexpected_token(data.module, *t, &[Comma])
                         }
                         continue 'outer;
                     }
                     let Some(name) = lexer.next_if(|t| t.kind == Name) else {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Name])
+                            unexpected_token(data.module, *t, &[Name])
                         }
                         continue 'outer;
                     };
                     if lexer.next_if(|t| t.kind == Comma).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Comma])
+                            unexpected_token(data.module, *t, &[Comma])
                         }
                         continue 'outer;
                     }
                     let Some(rhs) = lexer.next_if(|t| t.kind == Number || t.kind == Underscore)
                     else {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Number, Underscore]);
+                            unexpected_token(data.module, *t, &[Number, Underscore]);
                         }
                         continue 'outer;
                     };
                     if lexer.next_if(|t| t.kind == CloseParen).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[CloseParen]);
+                            unexpected_token(data.module, *t, &[CloseParen]);
                         }
                         continue 'outer;
                     }
                     if lexer.next_if(|t| t.kind == Semicolon).is_none() {
                         if let Some(t) = lexer.peek() {
-                            unexpected_token(data.module.get_source(), *t, &[Semicolon]);
+                            unexpected_token(data.module, *t, &[Semicolon]);
                         }
                         continue 'outer;
                     }

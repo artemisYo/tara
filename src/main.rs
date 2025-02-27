@@ -24,29 +24,31 @@ impl Provenance {
     }
     pub fn report(
         &self,
-        source: &str,
+        source: &Module,
         pointer: Style,
         kind: StyledStr,
         title: &str,
         notes: &[&str],
     ) {
-        let Some(start) = source.get(..self.start) else {
+		let src = source.get_source();
+		let name = source.path.as_ref();
+        let Some(start) = src.get(..self.start) else {
             return;
         };
         let start = start.rfind("\n").map(|n| n + 1).unwrap_or(0);
-        let Some(end) = source.get(self.end..) else {
+        let Some(end) = src.get(self.end..) else {
             return;
         };
-        let end = end.find("\n").map(|n| self.end + n).unwrap_or(source.len());
-        let text = &source[start..end];
+        let end = end.find("\n").map(|n| self.end + n).unwrap_or(src.len());
+        let text = &src[start..end];
 
         let digits = start.checked_ilog10().unwrap_or(0) + 1;
         let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
         let digits = digits as usize;
-        println!("╭─[{}]@b{}: {}", kind, self.start, title);
+        println!("╭─[{}]@{}:b{}: {}", kind, name, self.start, title);
         for (start, line) in text.lines().scan(start, |c, l| {
             let start = *c;
-            *c += l.len();
+            *c += l.len() + 1;
             Some((start, l))
         }) {
             let hl_start = self.start.saturating_sub(start);
@@ -244,7 +246,7 @@ fn main() {
         end: ctx.get_source(ctx.entry).len(),
     }
     .report(
-        ctx.get_source(ctx.entry),
+        ctx.get_module(ctx.entry),
         Style::default(),
         Style::yellow().apply("Cat"),
         "",
@@ -257,7 +259,7 @@ fn main() {
     //     println!("{:?}", t);
     // }
 
-    let ops = ctx.get_query::<prescan::Prescan>(ctx.entry);
+    let _ops = ctx.get_query::<prescan::Prescan>(ctx.entry);
     // println!("[scan]:");
     // for t in &ctx.query::<prescan::Prescan>(ops).0 {
     //     println!("{:?}", t);
