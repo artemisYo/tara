@@ -2,6 +2,7 @@ mod ansi;
 mod lexer;
 mod misc;
 mod prescan;
+mod preimport;
 mod tokens;
 
 use std::path::Path;

@@ -51,8 +51,8 @@ impl Query for Prescan<'_> {
     type Data<'a> = Prescan<'a>;
     type Output = (
         Box<[Token<'static>]>,
-        Box<[Opdef]>,
-        Box<[Vec<&'static str>]>,
+        Vec<Opdef>,
+        Box<[Box<[&'static str]>]>,
     );
 
     fn get(tara: &Tara, i: Self::Id) -> &Self::Output {
@@ -110,7 +110,7 @@ impl Query for Prescan<'_> {
                             break;
                         }
                     }
-                    imports.push(path);
+                    imports.push(path.into_boxed_slice());
                     if lexer.next_if(|t| t.kind == Semicolon).is_none() {
                         if let Some(t) = lexer.peek() {
                             unexpected_token(data.module, *t, &[Semicolon])
@@ -211,10 +211,9 @@ impl Query for Prescan<'_> {
                 }
             }
         }
-        drop(lexer);
         (
             tokens.into_boxed_slice(),
-            ops.into_boxed_slice(),
+            ops,
             imports.into_boxed_slice(),
         )
     }
