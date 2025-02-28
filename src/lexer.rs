@@ -1,15 +1,17 @@
 use crate::tokens::*;
 use crate::Provenance;
 
-impl<'src> From<&'src str> for Lexer<'src> {
-    fn from(value: &'src str) -> Self {
-        Lexer::new(value)
-    }
-}
+
 
 pub struct Lexer<'src> {
     source: &'src [u8],
     offset: usize,
+}
+
+impl<'src> From<&'src str> for Lexer<'src> {
+    fn from(value: &'src str) -> Self {
+        Lexer::new(value)
+    }
 }
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {

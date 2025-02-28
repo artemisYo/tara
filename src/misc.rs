@@ -53,6 +53,18 @@ impl<I: Indexer, T> Ivec<I, T> {
         let end = I::from(self.inner.len());
         (start, end)
     }
+    pub fn index(&self, idx: usize) -> Option<I> {
+        self.inner.get(idx)?;
+        Some(I::from(idx))
+    }
+    pub fn find(&self, mut p: impl FnMut(&T) -> bool) -> Option<I> {
+        self.inner
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| p(t))
+            .next()
+            .map(|(i, _)| I::from(i))
+    }
 }
 impl<I, T> Default for Ivec<I, T> {
     fn default() -> Self {
