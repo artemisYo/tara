@@ -38,7 +38,7 @@ fn preimport(ctx: &mut Tara, i: In) -> Out {
     for (loc, path) in prescan.imports.as_ref() {
         if path.len() < 2 {
             loc.meet(&path.first().map_or(*loc, |t| t.0)).report(
-                ctx.get_module(i.m),
+                &ctx,
                 Style::yellow() | Style::underline(),
                 Style::yellow().apply("Note"),
                 "This import does nothing!",

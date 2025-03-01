@@ -5,7 +5,7 @@ use crate::misc::Istr;
 use crate::{
     ansi::Style,
     tokens::{Token, Tokenkind},
-    Module, ModuleId, Provenance, Tara,
+    ModuleId, Provenance, Tara,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +47,7 @@ fn prescan(ctx: &mut Tara, i: In) -> Out {
     let mut ops = Vec::new();
     let mut tokens = Vec::new();
     let mut imports = Vec::new();
-    let lexer = ctx.get_module(m).get_lexer();
+    let lexer = ctx.get_lexer(m);
     let lexer = lexer.filter(|t| t.kind != Comment);
     let mut lexer = lexer.peekable();
     'outer: while let Some(t) = lexer.next() {
@@ -188,16 +188,15 @@ fn expect<'a>(
     if let Some(t) = lexer.next_if(|t| kinds.contains(&t.kind)) {
         Some(t)
     } else {
-        let m = ctx.get_module(m);
         match lexer.peek() {
-            Some(t) => unexpected_token(m, t.loc, t.kind.spelling(), kinds),
-            None => unexpected_token(m, m.eof_loc(), "EOF", kinds),
+            Some(t) => unexpected_token(ctx, t.loc, t.kind.spelling(), kinds),
+            None => unexpected_token(ctx, ctx.eof_loc(m), "EOF", kinds),
         }
         None
     }
 }
 
-fn unexpected_token<S: AsRef<str>>(source: &Module, loc: Provenance, sp: S, exps: &[Tokenkind]) {
+fn unexpected_token<S: AsRef<str>>(ctx: &Tara, loc: Provenance, sp: S, exps: &[Tokenkind]) {
     let title = if exps.len() == 1 {
         format!(
             "Expected '{}', but got '{}'!",
@@ -213,7 +212,7 @@ fn unexpected_token<S: AsRef<str>>(source: &Module, loc: Provenance, sp: S, exps
         title
     };
     loc.report(
-        source,
+        ctx,
         Style::red() | Style::underline(),
         Style::red().apply("Error"),
         &title,

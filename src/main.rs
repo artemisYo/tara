@@ -9,25 +9,30 @@ use ansi::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Provenance {
+    pub module: ModuleId,
     pub start: usize,
     pub end: usize,
 }
 
 impl Provenance {
     pub fn meet(&self, other: &Self) -> Self {
+        // sanity check; should not actually become a problem
+        assert_eq!(self.module, other.module, "cannot merge cross-module locations");
         Self {
+            module: self.module,
             start: self.start.min(other.start),
             end: self.end.max(other.end),
         }
     }
     pub fn report<'a>(
         &self,
-        source: &Module,
+        ctx: &Tara,
         pointer: Style,
         kind: StyledStr,
         title: &str,
         notes: impl Iterator<Item = &'a str>,
     ) {
+        let source = ctx.get_module(self.module);
         let mut notes = notes.peekable();
         let notes_empty = notes.peek().is_none();
         let src = source.get_source();
@@ -88,11 +93,12 @@ impl Provenance {
 fn main() {
     let mut ctx = Tara::from("example/main.tara");
     Provenance {
+        module: ctx.entry,
         start: 0,
         end: ctx.get_source(ctx.entry).len(),
     }
     .report(
-        ctx.get_module(ctx.entry),
+        &ctx,
         Style::default(),
         Style::yellow().apply("Cat"),
         "",
@@ -106,16 +112,29 @@ fn main() {
     // }
 
     let pi = ctx.preimport(preimport::In { m: ctx.entry });
-    let ops: Vec<_> = pi.ops.into_iter().map(|o| format!("{:?}", o)).collect();
+    let imports: Vec<_> = pi.imports.into_iter().map(|o| format!("{o:?}")).collect();
+    let ops: Vec<_> = pi.ops.into_iter().map(|o| format!("{o:?}")).collect();
     Provenance {
+        module: ctx.entry,
         start: 0,
         end: 0,
     }.report(
-        ctx.get_module(ctx.entry),
+        &ctx,
         Style::default(),
         Style::yellow().apply("Ops"),
         "",
         ops.iter().map(|s| s.as_ref())
+    );
+    Provenance {
+        module: ctx.entry,
+        start: 0,
+        end: 0,
+    }.report(
+        &ctx,
+        Style::default(),
+        Style::yellow().apply("Ops"),
+        "",
+        imports.iter().map(|s| s.as_ref())
     );
     // println!("[scan]:");
     // for t in &ctx.query::<prescan::Prescan>(ops).0 {

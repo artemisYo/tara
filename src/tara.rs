@@ -61,8 +61,19 @@ impl Tara {
         self.modules[m].children.push(id);
         id
     }
-    pub fn get_source(&self, m: ModuleId) -> &str {
+    pub fn get_source(&self, m: ModuleId) -> &'static str {
         self.get_module(m).get_source()
+    }
+    pub fn get_lexer(&self, m: ModuleId) -> crate::lexer::Lexer<'static> {
+        crate::lexer::Lexer::new(m, self.get_source(m))
+    }
+    pub fn eof_loc(&self, m: ModuleId) -> Provenance {
+        let source = self.get_source(m);
+        Provenance {
+            module: m,
+            start: source.len(),
+            end: source.len(),
+        }
     }
 }
 
@@ -74,16 +85,7 @@ pub struct Module {
     parent: ModuleId,
 }
 impl Module {
-    pub fn eof_loc(&self) -> Provenance {
-        Provenance {
-            start: self.source.len(),
-            end: self.source.len(),
-        }
-    }
-    pub fn get_lexer(&self) -> crate::lexer::Lexer<'static> {
-        crate::lexer::Lexer::new(self.source)
-    }
-    pub fn get_source(&self) -> &str {
+    pub fn get_source(&self) -> &'static str {
         &self.source
     }
     pub fn get_path(&self) -> &std::path::Path {

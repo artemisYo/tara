@@ -1,19 +1,17 @@
 use crate::tokens::*;
+use crate::ModuleId;
 use crate::Provenance;
 
 pub struct Lexer<'src> {
+    module: ModuleId,
     source: &'src [u8],
     offset: usize,
 }
 
-impl<'src> From<&'src str> for Lexer<'src> {
-    fn from(value: &'src str) -> Self {
-        Lexer::new(value)
-    }
-}
 impl<'src> Lexer<'src> {
-    pub fn new(source: &'src str) -> Self {
+    pub fn new(module: ModuleId, source: &'src str) -> Self {
         Self {
+            module,
             source: source.as_bytes(),
             offset: 0,
         }
@@ -82,6 +80,7 @@ impl<'src> Lexer<'src> {
             kind: Tokenkind::Comment,
             text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
+                module: self.module,
                 start,
                 end: self.offset,
             },
@@ -98,6 +97,7 @@ impl<'src> Lexer<'src> {
             self.offset += s.len();
             return Some(Token {
                 loc: Provenance {
+                module: self.module,
                     start,
                     end: self.offset,
                 },
@@ -161,6 +161,7 @@ impl<'src> Lexer<'src> {
             kind: Tokenkind::String,
             text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
+                module: self.module,
                 start,
                 end: self.offset,
             },
@@ -182,6 +183,7 @@ impl<'src> Lexer<'src> {
             kind: Tokenkind::Number,
             text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
+                module: self.module,
                 start,
                 end: self.offset,
             },
@@ -203,6 +205,7 @@ impl<'src> Lexer<'src> {
             kind: Tokenkind::Name,
             text: std::str::from_utf8(&text[..len]).unwrap(),
             loc: Provenance {
+                module: self.module,
                 start,
                 end: self.offset,
             },
