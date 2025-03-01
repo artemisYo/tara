@@ -1,42 +1,5 @@
 use std::{cell::RefCell, collections::BTreeSet, marker::PhantomData};
 
-pub struct PeekN<T: Iterator> {
-    iter: T,
-    buffer: std::collections::VecDeque<T::Item>,
-}
-impl<T: Iterator> Iterator for PeekN<T> {
-    type Item = T::Item;
-    fn next(&mut self) -> Option<Self::Item> {
-        let Some(i) = self.buffer.pop_front() else {
-            return self.iter.next();
-        };
-        Some(i)
-    }
-}
-impl<T: Iterator> PeekN<T> {
-    pub fn new(iter: T) -> Self {
-        Self {
-            iter,
-            buffer: Default::default(),
-        }
-    }
-    pub fn peek(&mut self, n: usize) -> Option<&T::Item> {
-        let d = n.saturating_sub(self.buffer.len());
-        if d == 0 {
-            return Some(&self.buffer[n]);
-        }
-        for _ in 0..d {
-            self.buffer.push_back(self.iter.next()?);
-        }
-        Some(&self.buffer[n])
-    }
-}
-impl<T: Iterator> From<T> for PeekN<T> {
-    fn from(value: T) -> Self {
-        Self::new(value)
-    }
-}
-
 pub struct Ivec<I, T> {
     inner: Vec<T>,
     _p: PhantomData<I>,
@@ -55,18 +18,6 @@ impl<I: Indexer, T> Ivec<I, T> {
     // }
     pub fn promise(&self) -> I {
         I::from(self.inner.len())
-    }
-    pub fn index(&self, idx: usize) -> Option<I> {
-        self.inner.get(idx)?;
-        Some(I::from(idx))
-    }
-    pub fn find(&self, mut p: impl FnMut(&T) -> bool) -> Option<I> {
-        self.inner
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| p(t))
-            .next()
-            .map(|(i, _)| I::from(i))
     }
 }
 impl<I, T> Default for Ivec<I, T> {
@@ -163,7 +114,7 @@ impl Eq for Istr {}
 impl From<&str> for Istr {
     fn from(value: &str) -> Self {
         thread_local! {
-            static STATE: RefCell<Interner> = RefCell::new(Interner { map: BTreeSet::new() });
+            static STATE: RefCell<Interner> = const { RefCell::new(Interner { map: BTreeSet::new() }) };
         }
         Istr(STATE.with(|i| i.borrow_mut().intern(value)))
     }

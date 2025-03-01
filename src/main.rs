@@ -104,16 +104,10 @@ fn main() {
         "",
         [].into_iter(),
     );
-    // println!("{}", ctx.get_source(ctx.entry));
-
-    // println!("[lex]:");
-    // for t in ctx.get_module(ctx.entry).get_lexer() {
-    //     println!("{:?}", t);
-    // }
 
     let pi = ctx.preimport(preimport::In { m: ctx.entry });
-    let imports: Vec<_> = pi.imports.into_iter().map(|o| format!("{o:?}")).collect();
-    let ops: Vec<_> = pi.ops.into_iter().map(|o| format!("{o:?}")).collect();
+    let imports: Vec<_> = pi.imports.iter().map(|o| format!("{o:?}")).collect();
+    let ops: Vec<_> = pi.ops.iter().map(|o| format!("{o:?}")).collect();
     Provenance {
         module: ctx.entry,
         start: 0,
@@ -136,28 +130,36 @@ fn main() {
         "",
         imports.iter().map(|s| s.as_ref())
     );
-    // println!("[scan]:");
-    // for t in &ctx.query::<prescan::Prescan>(ops).0 {
-    //     println!("{:?}", t);
-    // }
 
-    // println!("[scan rep]:");
-    // for t in &ctx.query::<prescan::Prescan>(ops).0 {
-    //     t.loc.report(
-    //         ctx.get_source(ctx.entry),
-    //         Style::cyan().apply("Report"),
-    //         "current token is:",
-    //         &[],
-    //     );
-    // }
-
-    // println!("[ops]:");
-    // for o in &ctx.query::<prescan::Prescan>(ops).1 {
-    //     println!("{:?}", o);
-    // }
-
-    // println!("[imports]:");
-    // for o in &ctx.query::<prescan::Prescan>(ops).2 {
-    //     println!("{:?}", o);
-    // }
+    let parse = ctx.parse(parse::In { m: ctx.entry });
+    for f in &parse.ast.funcs {
+        f.loc.report(
+            &ctx,
+            Style::default(),
+            Style::yellow().apply("Func"),
+            "This is a print out of a function",
+            [].into_iter()
+        );
+        f.args.loc().report(
+            &ctx,
+            Style::underline(),
+            Style::yellow().apply("Binding"),
+            "These are the functions args",
+            [].into_iter()
+        );
+        f.ret.loc.report(
+            &ctx,
+            Style::underline(),
+            Style::yellow().apply("Type"),
+            "This is the functions return type",
+            [].into_iter()
+        );
+        f.body.loc.report(
+            &ctx,
+            Style::underline(),
+            Style::yellow().apply("Expr"),
+            "This is the functions body",
+            [].into_iter()
+        );
+    }
 }

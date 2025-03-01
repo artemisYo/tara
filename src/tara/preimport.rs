@@ -38,7 +38,7 @@ fn preimport(ctx: &mut Tara, i: In) -> Out {
     for (loc, path) in prescan.imports.as_ref() {
         if path.len() < 2 {
             loc.meet(&path.first().map_or(*loc, |t| t.0)).report(
-                &ctx,
+                ctx,
                 Style::yellow() | Style::underline(),
                 Style::yellow().apply("Note"),
                 "This import does nothing!",
@@ -58,7 +58,7 @@ fn preimport(ctx: &mut Tara, i: In) -> Out {
     }
     for i in &imports {
         let i = ctx.preimport(In { m: i.target });
-        prescan.ops.extend(i.ops.into_iter());
+        prescan.ops.extend(i.ops.iter());
     }
     Out {
         ops: prescan.ops.into(),

@@ -1,5 +1,6 @@
 pub mod preimport;
 pub mod prescan;
+pub mod parse;
 
 use crate::{
     ansi::Style,
@@ -11,6 +12,7 @@ use std::{collections::BTreeMap as Map, path::PathBuf};
 pub struct Tara {
     pub entry: ModuleId,
     modules: Ivec<ModuleId, Module>,
+    parses: Map<parse::In, parse::Out>,
     prescans: Map<prescan::In, prescan::Out>,
     preimports: Map<preimport::In, preimport::Out>,
 }
@@ -22,6 +24,7 @@ impl Tara {
         Self {
             modules,
             entry,
+            parses: Default::default(),
             prescans: Default::default(),
             preimports: Default::default(),
         }
@@ -86,7 +89,7 @@ pub struct Module {
 }
 impl Module {
     pub fn get_source(&self) -> &'static str {
-        &self.source
+        self.source
     }
     pub fn get_path(&self) -> &std::path::Path {
         self.path.as_ref()

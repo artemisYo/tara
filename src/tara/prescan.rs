@@ -10,10 +10,13 @@ use crate::{
 
 #[derive(Debug, Clone, Copy)]
 pub struct Opdef {
-    lbp: Option<NonZero<u32>>,
-    rbp: Option<NonZero<u32>>,
-    spelling: Istr,
+    pub loc: Provenance,
+    pub lbp: Option<NonZero<u32>>,
+    pub rbp: Option<NonZero<u32>>,
+    pub spelling: Istr,
 }
+
+type RImport = (Provenance, Box<[(Provenance, Istr)]>);
 
 #[derive(Clone)]
 pub struct Out {
@@ -21,7 +24,7 @@ pub struct Out {
     // it's bad, but reasonable as it needs to be extended
     pub ops: Vec<Opdef>,
     pub tokens: Rc<[Token<Istr>]>,
-    pub imports: Rc<[(Provenance, Box<[(Provenance, Istr)]>)]>,
+    pub imports: Rc<[RImport]>,
 }
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct In {
@@ -121,13 +124,15 @@ fn prescan(ctx: &mut Tara, i: In) -> Out {
                 if expect(ctx, m, &mut lexer, &[CloseParen]).is_none() {
                     continue 'outer;
                 }
-                if expect(ctx, m, &mut lexer, &[Semicolon]).is_none() {
+                let Some(last) = expect(ctx, m, &mut lexer, &[Semicolon]) else {
                     continue 'outer;
-                }
+                };
+                let loc = t.loc.meet(&last.loc);
                 let name = name.text.into();
                 let lbp = lhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);
                 let rbp = rhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);
                 ops.push(Opdef {
+                    loc,
                     lbp: NonZero::new(lbp),
                     rbp: NonZero::new(rbp),
                     spelling: name,
@@ -205,7 +210,7 @@ fn unexpected_token<S: AsRef<str>>(ctx: &Tara, loc: Provenance, sp: S, exps: &[T
         )
     } else {
         let mut title = String::from("Expected one of ");
-        for e in &exps[0..] {
+        for e in exps {
             _ = write!(title, "'{}', ", e.spelling());
         }
         _ = write!(title, "but got '{}'!", sp.as_ref());

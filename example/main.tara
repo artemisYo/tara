@@ -1,13 +1,16 @@
-let an-str = "multiline strings can be done
-    "using consecutive newline-delimited ones.
-    operator "using an escape '\\' as the last character \
-    "in a line, removes the line break.
-    "normal escape sequences are\nalso\tsupported
-;
 
-operator;
+func fib(n: int): int {
+    if n < 2 { return n; };
+    fib(n - 2) + fib(n - 1)
+}
 
 func main(): int {
+    let an-str = "multiline strings can be done
+        "using consecutive newline-delimited ones.
+        "using an escape '\\' as the last character \
+        "in a line, removes the line break.
+        "normal escape sequences are\nalso\tsupported
+    ;
     let another!string = "this is a string";
     operator(3, &&, 4);
     let out = 5;

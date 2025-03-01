@@ -1,2 +1,4 @@
 
-operator(3, +, 4)
+operator(3, +, 4);
+operator(3, -, 4);
+operator(1, <, 2);
