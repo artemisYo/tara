@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, marker::PhantomData};
+use std::{cell::RefCell, collections::BTreeSet, marker::PhantomData};
 
 pub struct PeekN<T: Iterator> {
     iter: T,
@@ -47,11 +47,14 @@ impl<I: Indexer, T> Ivec<I, T> {
         self.inner.push(value);
         index
     }
-    pub fn push_range(&mut self, values: impl Iterator<Item = T>) -> (I, I) {
-        let start = I::from(self.inner.len());
-        self.inner.extend(values);
-        let end = I::from(self.inner.len());
-        (start, end)
+    // pub fn push_range(&mut self, values: impl Iterator<Item = T>) -> (I, I) {
+    //     let start = I::from(self.inner.len());
+    //     self.inner.extend(values);
+    //     let end = I::from(self.inner.len());
+    //     (start, end)
+    // }
+    pub fn promise(&self) -> I {
+        I::from(self.inner.len())
     }
     pub fn index(&self, idx: usize) -> Option<I> {
         self.inner.get(idx)?;
@@ -90,27 +93,27 @@ impl<I: Indexer, T> std::ops::IndexMut<I> for Ivec<I, T> {
         &mut self.inner[index]
     }
 }
-impl<I: Indexer, T> std::ops::Index<(I, I)> for Ivec<I, T> {
-    type Output = [T];
+// impl<I: Indexer, T> std::ops::Index<(I, I)> for Ivec<I, T> {
+//     type Output = [T];
 
-    fn index(&self, index: (I, I)) -> &Self::Output {
-        let (start, end) = index;
-        let (start, end) = (start.into(), end.into());
-        &self.inner[start..end]
-    }
-}
-impl<I: Indexer, T> std::ops::IndexMut<(I, I)> for Ivec<I, T> {
-    fn index_mut(&mut self, index: (I, I)) -> &mut Self::Output {
-        let (start, end) = index;
-        let (start, end) = (start.into(), end.into());
-        &mut self.inner[start..end]
-    }
-}
+//     fn index(&self, index: (I, I)) -> &Self::Output {
+//         let (start, end) = index;
+//         let (start, end) = (start.into(), end.into());
+//         &self.inner[start..end]
+//     }
+// }
+// impl<I: Indexer, T> std::ops::IndexMut<(I, I)> for Ivec<I, T> {
+//     fn index_mut(&mut self, index: (I, I)) -> &mut Self::Output {
+//         let (start, end) = index;
+//         let (start, end) = (start.into(), end.into());
+//         &mut self.inner[start..end]
+//     }
+// }
 
 #[macro_export]
 macro_rules! MkIndexer {
     ($v:vis $name:ident, $base:ty) => {
-        #[derive(Clone, Copy, PartialEq, Eq)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
         $v struct $name($base);
         impl From<usize> for $name {
             fn from(value: usize) -> Self {
@@ -138,7 +141,7 @@ pub struct Interner {
     map: BTreeSet<&'static str>,
 }
 impl Interner {
-    pub fn intern(&mut self, s: &str) -> &'static str {
+    fn intern(&mut self, s: &str) -> &'static str {
         if let Some(o) = self.map.get(s) {
             return o;
         }
@@ -146,5 +149,29 @@ impl Interner {
         let i = Box::leak(i);
         self.map.insert(i);
         i
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Istr(&'static str);
+impl PartialEq for Istr {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for Istr {}
+impl From<&str> for Istr {
+    fn from(value: &str) -> Self {
+        thread_local! {
+            static STATE: RefCell<Interner> = RefCell::new(Interner { map: BTreeSet::new() });
+        }
+        Istr(STATE.with(|i| i.borrow_mut().intern(value)))
+    }
+}
+impl std::ops::Deref for Istr {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
     }
 }

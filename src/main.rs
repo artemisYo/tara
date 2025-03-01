@@ -1,7 +1,6 @@
 mod ansi;
 mod lexer;
 mod misc;
-mod preimport;
 mod tokens;
 mod tara;
 pub use tara::*;
@@ -21,14 +20,16 @@ impl Provenance {
             end: self.end.max(other.end),
         }
     }
-    pub fn report(
+    pub fn report<'a>(
         &self,
         source: &Module,
         pointer: Style,
         kind: StyledStr,
         title: &str,
-        notes: &[&str],
+        notes: impl Iterator<Item = &'a str>,
     ) {
+        let mut notes = notes.peekable();
+        let notes_empty = notes.peek().is_none();
         let src = source.get_source();
         let name = source.get_path();
         let Some(start) = src.get(..self.start) else {
@@ -44,7 +45,7 @@ impl Provenance {
         let digits = start.checked_ilog10().unwrap_or(0) + 1;
         let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
         let digits = digits as usize;
-        println!("╭─[{}]@{}:b{}: {}", kind, name, self.start, title);
+        println!("╭─[{}]@{}:b{}: {}", kind, name.to_string_lossy(), self.start, title);
         for (start, line) in text.lines().scan(start, |c, l| {
             let start = *c;
             *c += l.len() + 1;
@@ -63,7 +64,7 @@ impl Provenance {
                 Style::default().apply(posttext)
             );
         }
-        if !notes.is_empty() {
+        if !notes_empty {
             println!("├─[{}Notes{}]:", Style::yellow(), Style::default());
             for n in notes {
                 let mut lines = n.lines();
@@ -80,7 +81,7 @@ impl Provenance {
         for _ in 0..digits {
             print!("─");
         }
-        println!("╯");
+        println!("{}", if notes_empty {"╯"} else {"─"});
     }
 }
 
@@ -95,7 +96,7 @@ fn main() {
         Style::default(),
         Style::yellow().apply("Cat"),
         "",
-        &[],
+        [].into_iter(),
     );
     // println!("{}", ctx.get_source(ctx.entry));
 
@@ -104,7 +105,18 @@ fn main() {
     //     println!("{:?}", t);
     // }
 
-    let _ops = ctx.prescan(ctx.entry);
+    let pi = ctx.preimport(preimport::In { m: ctx.entry });
+    let ops: Vec<_> = pi.ops.into_iter().map(|o| format!("{:?}", o)).collect();
+    Provenance {
+        start: 0,
+        end: 0,
+    }.report(
+        ctx.get_module(ctx.entry),
+        Style::default(),
+        Style::yellow().apply("Ops"),
+        "",
+        ops.iter().map(|s| s.as_ref())
+    );
     // println!("[scan]:");
     // for t in &ctx.query::<prescan::Prescan>(ops).0 {
     //     println!("{:?}", t);

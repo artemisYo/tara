@@ -1,8 +1,6 @@
 use crate::tokens::*;
 use crate::Provenance;
 
-
-
 pub struct Lexer<'src> {
     source: &'src [u8],
     offset: usize,
@@ -23,7 +21,7 @@ impl<'src> Lexer<'src> {
 }
 
 impl<'src> Iterator for Lexer<'src> {
-    type Item = Token<'src>;
+    type Item = Token<&'src str>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.strip_whitespace();
@@ -72,7 +70,7 @@ impl<'src> Lexer<'src> {
         self.offset += len;
     }
 
-    fn comment(&mut self) -> Option<Token<'src>> {
+    fn comment(&mut self) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         if !text.starts_with(b"//") {
@@ -90,7 +88,7 @@ impl<'src> Lexer<'src> {
         })
     }
 
-    fn with_table(&mut self, t: &[(&[u8], Tokenkind)]) -> Option<Token<'src>> {
+    fn with_table(&mut self, t: &[(&[u8], Tokenkind)]) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         for (s, k) in t {
@@ -110,11 +108,11 @@ impl<'src> Lexer<'src> {
         None
     }
 
-    fn immediates(&mut self) -> Option<Token<'src>> {
+    fn immediates(&mut self) -> Option<Token<&'src str>> {
         self.with_table(Self::IMMS)
     }
 
-    fn keywords(&mut self) -> Option<Token<'src>> {
+    fn keywords(&mut self) -> Option<Token<&'src str>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[
             Lexer::mk_tk(Func),
@@ -135,13 +133,13 @@ impl<'src> Lexer<'src> {
         self.with_table(TABLE)
     }
 
-    fn bools(&mut self) -> Option<Token<'src>> {
+    fn bools(&mut self) -> Option<Token<&'src str>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[(b"true", Bool), (b"false", Bool)];
         self.with_table(TABLE)
     }
 
-    fn string(&mut self) -> Option<Token<'src>> {
+    fn string(&mut self) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         if text[0] != b'"' {
@@ -169,7 +167,7 @@ impl<'src> Lexer<'src> {
         })
     }
 
-    fn number(&mut self) -> Option<Token<'src>> {
+    fn number(&mut self) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         let len = text
@@ -190,7 +188,7 @@ impl<'src> Lexer<'src> {
         })
     }
 
-    fn name(&mut self) -> Option<Token<'src>> {
+    fn name(&mut self) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         let len = text

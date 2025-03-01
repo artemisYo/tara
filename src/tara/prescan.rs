@@ -1,40 +1,49 @@
-use std::fmt::Write;
 use std::num::NonZero;
+use std::{fmt::Write, rc::Rc};
 
+use crate::misc::Istr;
 use crate::{
-    ansi::Style, tokens::{Token, Tokenkind}, MkIndexer, misc::Indexer, Module, ModuleId, Tara
+    ansi::Style,
+    tokens::{Token, Tokenkind},
+    Module, ModuleId, Provenance, Tara,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct Opdef {
     lbp: Option<NonZero<u32>>,
     rbp: Option<NonZero<u32>>,
-    spelling: &'static str,
+    spelling: Istr,
+}
+
+#[derive(Clone)]
+pub struct Out {
+    // this vec is cloned in preimport
+    // it's bad, but reasonable as it needs to be extended
+    pub ops: Vec<Opdef>,
+    pub tokens: Rc<[Token<Istr>]>,
+    pub imports: Rc<[(Provenance, Box<[(Provenance, Istr)]>)]>,
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct In {
+    pub m: ModuleId,
 }
 
 impl Tara {
-    pub fn prescan(&mut self, m: ModuleId) -> Id {
-        // .find is not gut efficient
-        match self.prescans.find(|d| d.m == m) {
-            Some(i) => i,
+    pub fn prescan(&mut self, i: In) -> Out {
+        match self.prescans.get(&i) {
+            Some(o) => o.clone(),
             None => {
-                let data = prescan(self, m);
-                self.prescans.push(data)
+                let data = prescan(self, i);
+                self.prescans.insert(i, data);
+                self.prescans.get(&i).unwrap().clone()
             }
         }
     }
 }
 
-MkIndexer!(pub Id, u32);
-pub struct Data {
-    m: ModuleId,
-    ops: Vec<Opdef>,
-    tokens: Box<[Token<'static>]>,
-    imports: Box<[Box<[&'static str]>]>
-}
-
-fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
+fn prescan(ctx: &mut Tara, i: In) -> Out {
     use Tokenkind::*;
+    let m = i.m;
     let mut ops = Vec::new();
     let mut tokens = Vec::new();
     let mut imports = Vec::new();
@@ -47,7 +56,7 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
                 let Some(part) = expect(ctx, m, &mut lexer, &[Name]) else {
                     continue 'outer;
                 };
-                let mut path = vec![ctx.intern(part.text)];
+                let mut path = vec![(part.loc, part.text.into())];
                 while lexer
                     .peek()
                     .filter(|t| t.kind == Slash)
@@ -56,14 +65,14 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
                     .is_some()
                 {
                     let Some(part) = expect(ctx, m, &mut lexer, &[Name, Ellipsis]) else {
-                        continue 'outer;
+                        break;
                     };
-                    path.push(ctx.intern(part.text));
+                    path.push((part.loc, part.text.into()));
                     if part.kind == Ellipsis {
                         break;
                     }
                 }
-                imports.push(path.into_boxed_slice());
+                imports.push((t.loc, path.into_boxed_slice()));
                 if expect(ctx, m, &mut lexer, &[Semicolon]).is_none() {
                     continue 'outer;
                 }
@@ -82,7 +91,7 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
                     loc = loc.meet(&t.loc);
                     cat_str(&mut cat, t.text);
                 }
-                let text = ctx.intern(cat.as_ref());
+                let text = cat.as_str().into();
                 tokens.push(Token {
                     kind: String,
                     text,
@@ -115,7 +124,7 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
                 if expect(ctx, m, &mut lexer, &[Semicolon]).is_none() {
                     continue 'outer;
                 }
-                let name = ctx.intern(name.text);
+                let name = name.text.into();
                 let lbp = lhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);
                 let rbp = rhs.text.parse::<u32>().map(|n| n + 1).unwrap_or(0);
                 ops.push(Opdef {
@@ -126,7 +135,7 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
             }
 
             _ => {
-                let text = ctx.intern(t.text);
+                let text = t.text.into();
                 tokens.push(Token {
                     kind: t.kind,
                     loc: t.loc,
@@ -135,27 +144,10 @@ fn prescan(ctx: &mut Tara, m: ModuleId) -> Data {
             }
         }
     }
-    Data {
-        m,
+    Out {
         ops,
-        tokens: tokens.into_boxed_slice(),
-        imports: imports.into_boxed_slice()
-    }
-}
-
-fn expect<'a>(
-    ctx: &Tara,
-    m: ModuleId,
-    lexer: &mut std::iter::Peekable<impl Iterator<Item = Token<'a>>>,
-    kinds: &[Tokenkind],
-) -> Option<Token<'a>> {
-    if let Some(t) = lexer.next_if(|t| kinds.contains(&t.kind)) {
-        return Some(t);
-    } else {
-        if let Some(t) = lexer.peek() {
-            unexpected_token(ctx.get_module(m), *t, kinds);
-        }
-        return None;
+        tokens: tokens.into(),
+        imports: imports.into(),
     }
 }
 
@@ -187,26 +179,44 @@ fn cat_str(b: &mut String, s: &str) {
     }
 }
 
-fn unexpected_token(source: &Module, t: Token, exps: &[Tokenkind]) {
+fn expect<'a>(
+    ctx: &Tara,
+    m: ModuleId,
+    lexer: &mut std::iter::Peekable<impl Iterator<Item = Token<&'a str>>>,
+    kinds: &[Tokenkind],
+) -> Option<Token<&'a str>> {
+    if let Some(t) = lexer.next_if(|t| kinds.contains(&t.kind)) {
+        Some(t)
+    } else {
+        let m = ctx.get_module(m);
+        match lexer.peek() {
+            Some(t) => unexpected_token(m, t.loc, t.kind.spelling(), kinds),
+            None => unexpected_token(m, m.eof_loc(), "EOF", kinds),
+        }
+        None
+    }
+}
+
+fn unexpected_token<S: AsRef<str>>(source: &Module, loc: Provenance, sp: S, exps: &[Tokenkind]) {
     let title = if exps.len() == 1 {
         format!(
             "Expected '{}', but got '{}'!",
             exps[0].spelling(),
-                t.kind.spelling()
+            sp.as_ref(),
         )
     } else {
         let mut title = String::from("Expected one of ");
         for e in &exps[0..] {
             _ = write!(title, "'{}', ", e.spelling());
         }
-        _ = write!(title, "but got '{}'!", t.kind.spelling());
+        _ = write!(title, "but got '{}'!", sp.as_ref());
         title
     };
-    t.loc.report(
+    loc.report(
         source,
         Style::red() | Style::underline(),
-                 Style::red().apply("Error"),
-                 &title,
-                 &[],
+        Style::red().apply("Error"),
+        &title,
+        [].into_iter(),
     );
 }

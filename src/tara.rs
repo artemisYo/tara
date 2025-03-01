@@ -1,29 +1,30 @@
-mod prescan;
+pub mod preimport;
+pub mod prescan;
 
-use crate::{ansi::{Color, Style}, misc::{Indexer, Interner, Ivec}, MkIndexer};
+use crate::{
+    ansi::Style,
+    misc::{Indexer, Ivec},
+    MkIndexer, Provenance,
+};
+use std::{collections::BTreeMap as Map, path::PathBuf};
 
 pub struct Tara {
     pub entry: ModuleId,
-    interner: Interner,
     modules: Ivec<ModuleId, Module>,
-    prescans: Ivec<prescan::Id, prescan::Data>,
+    prescans: Map<prescan::In, prescan::Out>,
+    preimports: Map<preimport::In, preimport::Out>,
 }
 impl Tara {
     pub fn from(main: &str) -> Self {
         let mut modules = Ivec::default();
-        let entry = modules.push(Module::from_file(main).expect("TODO: gut error message"));
+        let entry = modules.promise();
+        modules.push(Module::from_file(main.into(), entry).expect("TODO: gut error message"));
         Self {
             modules,
             entry,
             prescans: Default::default(),
-            interner: Default::default(),
+            preimports: Default::default(),
         }
-    }
-    fn push_module(&mut self, m: Module) -> ModuleId {
-        self.modules.push(m)
-    }
-    pub fn intern(&mut self, s: &str) -> &'static str {
-        self.interner.intern(s)
     }
     pub fn print_modules(&self) {
         self.print_submodule(&self.modules[self.entry], 0);
@@ -33,23 +34,32 @@ impl Tara {
             print!("  ");
         }
         println!("| {:?}", &m.path);
-        if let Some(cs) = m.children {
-            for c in &self.modules[cs] {
-                self.print_submodule(c, level + 1);
-            }
+        for c in &m.children {
+            let c = &self.modules[*c];
+            self.print_submodule(c, level + 1);
         }
     }
     pub fn get_module(&self, m: ModuleId) -> &Module {
         &self.modules[m]
     }
-    pub fn get_children(&mut self, m: ModuleId) -> (ModuleId, ModuleId) {
-        if let Some(cs) = self.modules[m].children {
-            return cs;
+    pub fn get_sibling(&mut self, m: ModuleId, s: &str) -> ModuleId {
+        let m = self.modules[m].parent;
+        self.get_child(m, s)
+    }
+    pub fn get_child(&mut self, m: ModuleId, s: &str) -> ModuleId {
+        // probably not gut
+        for &c in &self.modules[m].children {
+            if self.modules[c].path.file_name().unwrap().to_str().unwrap() == s {
+                return c;
+            }
         }
-        let children = Module::from_file_children(&self.modules[m].path);
-        let cs = self.modules.push_range(children.into_iter());
-        self.modules[m].children = Some(cs);
-        self.get_children(m)
+        let mut path = self.modules[m].path.clone();
+        path.set_extension("");
+        path.push(s);
+        path.set_extension("tara");
+        let id = self.modules.push(Module::from_file(path, m).expect("too lazy to think how this'd fail"));
+        self.modules[m].children.push(id);
+        id
     }
     pub fn get_source(&self, m: ModuleId) -> &str {
         self.get_module(m).get_source()
@@ -58,49 +68,28 @@ impl Tara {
 
 MkIndexer!(pub ModuleId, u32);
 pub struct Module {
+    path: PathBuf,
     source: &'static str,
-    path: Box<str>,
-    children: Option<(ModuleId, ModuleId)>,
+    children: Vec<ModuleId>,
+    parent: ModuleId,
 }
 impl Module {
+    pub fn eof_loc(&self) -> Provenance {
+        Provenance {
+            start: self.source.len(),
+            end: self.source.len(),
+        }
+    }
     pub fn get_lexer(&self) -> crate::lexer::Lexer<'static> {
         crate::lexer::Lexer::new(self.source)
     }
     pub fn get_source(&self) -> &str {
         &self.source
     }
-    fn from_file_children(path: &str) -> Vec<Self> {
-        let dir: &std::path::Path = path[0..path.len() - 5].as_ref();
-        if !dir.is_dir() {
-            return Vec::new();
-        }
-        let dir = match dir.read_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                println!(
-                    "[{}Error{}]: Module directory {:?} exists, but is not readable!",
-                    Color::Red,
-                    Style::default(),
-                    dir
-                );
-                println!("| {}", e);
-                std::process::exit(1);
-            }
-        };
-        let mut out = Vec::new();
-        for e in dir.filter_map(Result::ok) {
-            let p = e.path();
-            let Some(s) = p.to_str() else {
-                continue;
-            };
-            let Some(m) = Module::from_file(s) else {
-                continue;
-            };
-            out.push(m);
-        }
-        out
+    pub fn get_path(&self) -> &std::path::Path {
+        self.path.as_ref()
     }
-    fn from_file(path: &str) -> Option<Self> {
+    fn from_file(path: PathBuf, parent: ModuleId) -> Option<Self> {
         let ppath: &std::path::Path = path.as_ref();
         if !ppath.exists() {
             println!(
@@ -118,7 +107,7 @@ impl Module {
             return None;
         }
 
-        let source = match std::fs::read_to_string(path) {
+        let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
                 println!(
@@ -131,16 +120,12 @@ impl Module {
                 std::process::exit(1);
             }
         };
-        let source = source.into_boxed_str();
 
         Some(Self {
-            source: Box::leak(source),
-            path: Box::from(path),
-            children: None,
+            path,
+            source: String::leak(source),
+            children: Vec::new(),
+            parent,
         })
-    }
-
-    pub fn get_path(&self) -> &str {
-        self.path.as_ref()
     }
 }

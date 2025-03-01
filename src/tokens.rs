@@ -1,10 +1,10 @@
 use crate::Provenance;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Token<'s> {
+pub struct Token<S> {
     pub kind: Tokenkind,
     pub loc: Provenance,
-    pub text: &'s str,
+    pub text: S,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tokenkind {
