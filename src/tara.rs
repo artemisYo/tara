@@ -1,6 +1,7 @@
+pub mod parse;
 pub mod preimport;
 pub mod prescan;
-pub mod parse;
+pub mod uir;
 
 use crate::{
     ansi::Style,
@@ -12,18 +13,26 @@ use std::{collections::BTreeMap as Map, path::PathBuf};
 pub struct Tara {
     pub entry: ModuleId,
     modules: Ivec<ModuleId, Module>,
-    parses: Map<parse::In, parse::Out>,
-    prescans: Map<prescan::In, prescan::Out>,
-    preimports: Map<preimport::In, preimport::Out>,
+    uir_items: Ivec<uir::Id, uir::Function>,
+    resolution: Map<uir::In, Option<uir::Out>>,
+    parses: Map<parse::In, Option<parse::Out>>,
+    prescans: Map<prescan::In, Option<prescan::Out>>,
+    preimports: Map<preimport::In, Option<preimport::Out>>,
 }
 impl Tara {
     pub fn from(main: &str) -> Self {
         let mut modules = Ivec::default();
-        let entry = modules.promise();
-        modules.push(Module::from_file(main.into(), entry).expect("TODO: gut error message"));
+        let top = modules.promise();
+        let mut src_dir: PathBuf = main.into();
+        src_dir.pop();
+        modules.push(Module::top_level(src_dir, top));
+        let entry =
+            modules.push(Module::from_file(main.into(), top).expect("TODO: gut error message"));
         Self {
             modules,
             entry,
+            uir_items: Default::default(),
+            resolution: Default::default(),
             parses: Default::default(),
             prescans: Default::default(),
             preimports: Default::default(),
@@ -60,7 +69,9 @@ impl Tara {
         path.set_extension("");
         path.push(s);
         path.set_extension("tara");
-        let id = self.modules.push(Module::from_file(path, m).expect("too lazy to think how this'd fail"));
+        let id = self
+            .modules
+            .push(Module::from_file(path, m).expect("too lazy to think how this'd fail"));
         self.modules[m].children.push(id);
         id
     }
@@ -69,6 +80,9 @@ impl Tara {
     }
     pub fn get_lexer(&self, m: ModuleId) -> crate::lexer::Lexer<'static> {
         crate::lexer::Lexer::new(m, self.get_source(m))
+    }
+    pub fn get_uir(&self, u: uir::Id) -> &uir::Function {
+        &self.uir_items[u]
     }
     pub fn eof_loc(&self, m: ModuleId) -> Provenance {
         let source = self.get_source(m);
@@ -93,6 +107,14 @@ impl Module {
     }
     pub fn get_path(&self) -> &std::path::Path {
         self.path.as_ref()
+    }
+    fn top_level(path: PathBuf, self_id: ModuleId) -> Self {
+        Module {
+            path,
+            source: "",
+            children: Vec::new(),
+            parent: self_id,
+        }
     }
     fn from_file(path: PathBuf, parent: ModuleId) -> Option<Self> {
         let ppath: &std::path::Path = path.as_ref();

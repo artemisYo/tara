@@ -162,4 +162,10 @@ fn main() {
             [].into_iter()
         );
     }
+
+    let resolution = ctx.resolve(uir::In { m: ctx.entry });
+    for i in resolution.items.iter() {
+        let uir = ctx.get_uir(*i);
+        println!("Locals of uir item '{}':\n{:#?}", uir.name.0, uir.locals);
+    }
 }

@@ -26,6 +26,7 @@ pub struct Out {
     pub tokens: Rc<[Token<Istr>]>,
     pub imports: Rc<[RImport]>,
 }
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct In {
     pub m: ModuleId,
@@ -34,11 +35,15 @@ pub struct In {
 impl Tara {
     pub fn prescan(&mut self, i: In) -> Out {
         match self.prescans.get(&i) {
-            Some(o) => o.clone(),
+            Some(Some(o)) => o.clone(),
+            Some(None) => panic!("prescan entered a cycle!"),
             None => {
+                // 'reserve' the spot, so that if the key is ever seen again,
+                // we know it's a cycle
+                self.prescans.insert(i, None);
                 let data = prescan(self, i);
-                self.prescans.insert(i, data);
-                self.prescans.get(&i).unwrap().clone()
+                self.prescans.insert(i, Some(data));
+                self.prescans.get(&i).cloned().unwrap().unwrap()
             }
         }
     }

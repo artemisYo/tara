@@ -1,5 +1,32 @@
 use std::{cell::RefCell, collections::BTreeSet, marker::PhantomData};
 
+#[derive(Debug)]
+pub struct Svec<K, V> {
+    keys: Vec<K>,
+    vals: Vec<V>,
+}
+impl<K: Eq, V> Svec<K, V> {
+    pub fn insert(&mut self, k: K, v: V) {
+        self.keys.push(k);
+        self.vals.push(v);
+    }
+    pub fn find(&self, k: &K) -> Option<&V> {
+        self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &self.vals[i])
+    }
+    pub fn find_mut(&mut self, k: &K) -> Option<&mut V> {
+        self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &mut self.vals[i])
+    }
+}
+impl<K, V> Default for Svec<K, V> {
+    fn default() -> Self {
+        Self {
+            keys: Default::default(),
+            vals: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Ivec<I, T> {
     inner: Vec<T>,
     _p: PhantomData<I>,
@@ -104,13 +131,26 @@ impl Interner {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Istr(&'static str);
+pub struct Istr(pub &'static str);
 impl PartialEq for Istr {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.0, other.0)
     }
 }
 impl Eq for Istr {}
+impl PartialOrd for Istr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Istr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // should be fine, as interning would recognize strings
+        // of different lengths as different
+        #[allow(ambiguous_wide_pointer_comparisons)]
+        (self.0 as *const str).cmp(&(other.0 as *const str))
+    }
+}
 impl From<&str> for Istr {
     fn from(value: &str) -> Self {
         thread_local! {

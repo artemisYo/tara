@@ -24,11 +24,15 @@ pub struct In {
 impl Tara {
     pub fn parse(&mut self, i: In) -> Out {
         match self.parses.get(&i) {
-            Some(o) => o.clone(),
+            Some(Some(o)) => o.clone(),
+            Some(None) => panic!("parse entered a cycle!"),
             None => {
+                // 'reserve' the spot, so that if the key is ever seen again,
+                // we know it's a cycle
+                self.parses.insert(i, None);
                 let data = parse(self, i);
-                self.parses.insert(i, data);
-                self.parses.get(&i).unwrap().clone()
+                self.parses.insert(i, Some(data));
+                self.parses.get(&i).cloned().unwrap().unwrap()
             }
         }
     }
@@ -91,7 +95,7 @@ pub enum Exprkind {
     Call(Box<[Expr; 2]>),
     Tuple(Vec<Expr>),
     Loop(Box<Expr>),
-    BareBlock(Vec<Expr>),
+    Bareblock(Vec<Expr>),
     Recall(Istr),
     Number(Istr),
     String(Istr),
@@ -130,12 +134,12 @@ struct Parser<'a> {
     ops: Rc<[Opdef]>,
 }
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     fn n_peek(&self, n: usize) -> Option<Token<Istr>> {
-        self.tokens.get(n).map(|t| *t)
+        self.tokens.get(n).copied()
     }
     fn peek(&self) -> Option<Token<Istr>> {
-        self.tokens.get(0).map(|t| *t)
+        self.tokens.first().copied()
     }
 
     fn n_is(&self, n: usize, k: Tokenkind) -> bool {
@@ -549,7 +553,7 @@ impl<'a> Parser<'a> {
         let loc = loc.meet(&self.expect(Tokenkind::CloseBrace).loc);
         Expr {
             loc,
-            kind: Exprkind::BareBlock(body),
+            kind: Exprkind::Bareblock(body),
         }
     }
 
@@ -646,10 +650,10 @@ impl<'a> Parser<'a> {
 
     fn expr_atom_first(&self) -> bool {
         use Tokenkind::*;
-        match self.peek().map(|t| t.kind) {
-            Some(OpenParen) | Some(Name) | Some(String) | Some(Number) | Some(Bool) => true,
-            _ => false,
-        }
+        matches!(
+            self.peek().map(|t| t.kind),
+            Some(OpenParen) | Some(Name) | Some(String) | Some(Number) | Some(Bool)
+        )
     }
 
     fn expr_atom(&mut self) -> Expr {
@@ -657,9 +661,8 @@ impl<'a> Parser<'a> {
         let t = self.peek();
         match t.map(|t| t.kind) {
             Some(OpenParen) => {
-                let expr_parenthesised = self.expr_parenthesised();
-                expr_parenthesised
-            },
+                self.expr_parenthesised()
+            }
             Some(Name) => {
                 let t = self.eat();
                 Expr {

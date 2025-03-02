@@ -4,8 +4,8 @@ use crate::{ansi::Style, misc::Istr, prescan::Opdef, tara::prescan, ModuleId, Ta
 
 #[derive(Debug)]
 pub struct Import {
-    target: ModuleId,
-    head: Option<Istr>,
+    pub target: ModuleId,
+    pub head: Option<Istr>,
 }
 
 #[derive(Clone)]
@@ -22,11 +22,15 @@ pub struct In {
 impl Tara {
     pub fn preimport(&mut self, i: In) -> Out {
         match self.preimports.get(&i) {
-            Some(o) => o.clone(),
+            Some(Some(o)) => o.clone(),
+            Some(None) => panic!("preimport entered a cycle!"),
             None => {
+                // 'reserve' the spot, so that if the key is ever seen again,
+                // we know it's a cycle
+                self.preimports.insert(i, None);
                 let data = preimport(self, i);
-                self.preimports.insert(i, data);
-                self.preimports.get(&i).unwrap().clone()
+                self.preimports.insert(i, Some(data));
+                self.preimports.get(&i).cloned().unwrap().unwrap()
             }
         }
     }

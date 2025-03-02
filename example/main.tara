@@ -1,4 +1,8 @@
 
+func <(): int = 1;
+func -(): int = 1;
+func +(): int = 1;
+
 func fib(n: int): int {
     if n < 2 { return n; };
     fib(n - 2) + fib(n - 1)
@@ -20,4 +24,4 @@ func main(): int {
 // this is a comment
 operator(_, !, 5);
 
-import bar/; import foo/...;
+import bar/; import main/foo/...;
