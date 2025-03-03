@@ -179,7 +179,7 @@ pub fn report_simple(kind: StyledStr, title: &str, extra: Option<&str>) {
     }
 }
 
-pub fn report<'a>(ctx: &Tara, head: Message, extra: &[Message]) {
+pub fn report(ctx: &Tara, head: Message, extra: &[Message]) {
     print!("╭─");
     head.print_header(ctx);
     let mut digits = extra

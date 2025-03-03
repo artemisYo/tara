@@ -4,7 +4,7 @@ use super::{preimport, ModuleId, Tara};
 use crate::{
     ansi::Style,
     misc::{Indexer, Istr, Ivec, Svec},
-    parse, MkIndexer, Provenance,
+    parse, report, Message, MkIndexer, Provenance,
 };
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -193,14 +193,14 @@ impl Display for Typekind {
             Typekind::Call { args, func } => write!(f, "{}{}", func, args),
             Typekind::Bundle(items) => {
                 write!(f, "(")?;
-                if items.len() > 0 {
+                if !items.is_empty() {
                     write!(f, "{}", &items[0])?;
                     for i in &items[0..] {
                         write!(f, ", {}", i)?;
                     }
                 }
                 write!(f, ")")
-            },
+            }
             Typekind::Recall(istr) => write!(f, "{}", istr.0),
             Typekind::Var(i) => write!(f, "?{}", i),
             Typekind::String => write!(f, "string"),
@@ -354,10 +354,7 @@ impl Context {
         });
         let args = locals.push_expr(Expr {
             loc: f.args.loc(),
-            typ: Type {
-                loc: f.args.loc(),
-                kind: Typekind::default(),
-            },
+            typ: Type::unit(f.args.loc()),
             kind: Exprkind::Let(bind, args),
         });
         let body = locals.push_expr(Expr {
@@ -483,27 +480,26 @@ impl Context {
                         (Type::unit(e.loc), Exprkind::Assign(bid, expr))
                     }
                     Some(Err(gid)) => {
-                        e.loc.report(
+                        report(
                             ctx,
-                            Provenance::RED_PTR,
-                            Provenance::ERROR,
-                            "The following name is not assignable!",
-                            [format!(
-                                "'{}' refers to a global item",
-                                ctx.uir_items[*gid].name.0
-                            )]
-                            .into_iter(),
+                            Message::error("The following name is not assignable!", Some(e.loc)),
+                            // TODO: point to the name instead of the whole item
+                            &[Message::note(
+                                &format!(
+                                    "'{}' refers to a global item!",
+                                    ctx.uir_items[*gid].name.0
+                                ),
+                                Some(ctx.uir_items[*gid].loc),
+                            )],
                         );
                         self.expressions(locals, ctx, expr);
                         (Type::unit(e.loc), Exprkind::Poison)
                     }
                     None => {
-                        e.loc.report::<&str>(
+                        report(
                             ctx,
-                            Provenance::RED_PTR,
-                            Provenance::ERROR,
-                            "Could not resolve the following name!",
-                            [].into_iter(),
+                            Message::error("Could not resolve the following name!", Some(e.loc)),
+                            &[],
                         );
                         self.expressions(locals, ctx, expr);
                         (Type::unit(e.loc), Exprkind::Poison)
@@ -611,10 +607,7 @@ impl Context {
 
     fn binding_type(&mut self, b: &parse::Binding) -> Type {
         match b {
-            parse::Binding::Empty(loc) => Type {
-                kind: Typekind::default(),
-                loc: *loc,
-            },
+            parse::Binding::Empty(loc) => Type::unit(*loc),
             parse::Binding::Name(_, _, Some(t)) => Self::types(t),
             parse::Binding::Name(loc, _, None) => self.new_typevar(*loc),
             parse::Binding::Tuple(loc, bindings) => Type::tup(
