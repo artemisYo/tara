@@ -6,6 +6,31 @@ use crate::{
     parse, MkIndexer, Provenance,
 };
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct In {
+    pub m: ModuleId,
+}
+
+#[derive(Clone)]
+pub struct Out {
+    pub items: Rc<[Id]>,
+}
+
+impl Tara {
+    pub fn resolve(&mut self, i: In) -> Out {
+        match self.resolution.get(&i) {
+            Some(Some(o)) => o.clone(),
+            Some(None) => panic!("resolution entered a cycle!"),
+            None => {
+                self.resolution.insert(i, None);
+                let data = Context::default().resolve(self, i);
+                self.resolution.insert(i, Some(data));
+                self.resolution.get(&i).cloned().unwrap().unwrap()
+            }
+        }
+    }
+}
+
 MkIndexer!(pub Id, u32);
 MkIndexer!(pub LocalId, u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -33,11 +58,24 @@ impl std::ops::Index<LocalId> for LocalVec {
         &self.0[index]
     }
 }
+impl std::ops::IndexMut<LocalId> for LocalVec {
+    fn index_mut(&mut self, index: LocalId) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
 impl std::ops::Index<ExprId> for LocalVec {
     type Output = Expr;
 
     fn index(&self, index: ExprId) -> &Self::Output {
         match &self[index.0] {
+            Locals::Expr(e) => e,
+            _ => unreachable!(),
+        }
+    }
+}
+impl std::ops::IndexMut<ExprId> for LocalVec {
+    fn index_mut(&mut self, index: ExprId) -> &mut Self::Output {
+        match &mut self[index.0] {
             Locals::Expr(e) => e,
             _ => unreachable!(),
         }
@@ -68,6 +106,27 @@ pub struct Type {
     pub kind: Typekind,
 }
 impl Type {
+    pub fn replace(&mut self, t: usize, by: &Type) {
+        match &mut self.kind {
+            Typekind::Func { args, ret } => {
+                args.replace(t, by);
+                ret.replace(t, by);
+            },
+            Typekind::Call { args, func } => {
+                args.replace(t, by);
+                func.replace(t, by);
+            },
+            Typekind::Bundle(items) => {
+                for i in items.iter_mut() {
+                    i.replace(t, by);
+                }
+            },
+            Typekind::Var(v) if t == *v => {
+                self.kind = by.kind.clone();
+            },
+            _ => {}
+        }
+    }
     pub fn return_type(&self) -> Option<&Type> {
         match self.kind {
             Typekind::Func { ref ret, .. } => Some(ret),
@@ -97,8 +156,14 @@ impl Type {
         }
     }
 }
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+impl Eq for Type {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Typekind {
     Func { args: Box<Type>, ret: Box<Type> },
     Call { args: Box<Type>, func: Box<Type> },
@@ -160,7 +225,10 @@ pub enum Exprkind {
 
     Let(BindingId, ExprId),
     Assign(BindingId, ExprId),
-    Break(ExprId),
+    Break {
+        val: ExprId,
+        target: ExprId,
+    },
     Return(ExprId),
     Const(ExprId),
 }
@@ -183,34 +251,10 @@ pub enum Bindkind {
     Tuple(Vec<BindingId>),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct In {
-    pub m: ModuleId,
-}
-
-#[derive(Clone)]
-pub struct Out {
-    pub items: Rc<[Id]>,
-}
-
-impl Tara {
-    pub fn resolve(&mut self, i: In) -> Out {
-        match self.resolution.get(&i) {
-            Some(Some(o)) => o.clone(),
-            Some(None) => panic!("resolution entered a cycle!"),
-            None => {
-                self.resolution.insert(i, None);
-                let data = Context::default().resolve(self, i);
-                self.resolution.insert(i, Some(data));
-                self.resolution.get(&i).cloned().unwrap().unwrap()
-            }
-        }
-    }
-}
-
 #[derive(Default)]
 struct Context {
     names: Svec<Istr, Result<BindingId, Id>>,
+    loops: Vec<ExprId>,
     tvar_count: usize,
 }
 impl Context {
@@ -325,8 +369,23 @@ impl Context {
                 (Type::tup(types, e.loc), Exprkind::Tuple(exprs))
             }
             parse::Exprkind::Loop(ref expr) => {
+                // 'reserve' a local slot
+                let id = locals.push_expr(Expr {
+                    loc: e.loc,
+                    typ: Type::unit(e.loc),
+                    kind: Exprkind::default(),
+                });
+                self.loops.push(id);
                 let expr = self.expressions(locals, ctx, expr);
-                (self.new_typevar(e.loc), Exprkind::Loop(expr))
+                self.loops.pop();
+                let typ = self.new_typevar(e.loc);
+                let kind = Exprkind::Loop(expr);
+                locals[id] = Expr {
+                    loc: e.loc,
+                    typ,
+                    kind,
+                };
+                return id;
             }
             parse::Exprkind::Bareblock(ref exprs) => {
                 let exprs: Vec<_> = exprs
@@ -384,16 +443,20 @@ impl Context {
                 (Type::unit(e.loc), Exprkind::Assign(bid, expr))
             }
             parse::Exprkind::Break(None) => {
+                let &target = self.loops.last().expect("TODO: Reporting");
                 let expr = locals.push_expr(Expr {
                     loc: e.loc,
                     typ: Type::unit(e.loc),
                     kind: Exprkind::default(),
                 });
-                (Type::unit(e.loc), Exprkind::Break(expr))
+                (Type::unit(e.loc), Exprkind::Break { val: expr, target })
             }
             parse::Exprkind::Break(Some(ref expr)) => (
                 Type::unit(e.loc),
-                Exprkind::Break(self.expressions(locals, ctx, expr)),
+                Exprkind::Break {
+                    val: self.expressions(locals, ctx, expr),
+                    target: *self.loops.last().expect("TODO: Reporting"),
+                },
             ),
             parse::Exprkind::Return(None) => {
                 let expr = locals.push_expr(Expr {
@@ -503,6 +566,9 @@ impl Context {
                     let items = items.iter().map(Self::types).collect();
                     Typekind::Bundle(items)
                 }
+                parse::Typekind::Recall(istr) if *istr == "int".into() => Typekind::Int,
+                parse::Typekind::Recall(istr) if *istr == "string".into() => Typekind::String,
+                parse::Typekind::Recall(istr) if *istr == "bool".into() => Typekind::Bool,
                 parse::Typekind::Recall(istr) => Typekind::Recall(*istr),
             },
         }

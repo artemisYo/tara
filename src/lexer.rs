@@ -79,7 +79,7 @@ impl<'src> Lexer<'src> {
         Some(Token {
             kind: Tokenkind::Comment,
             text: std::str::from_utf8(&text[..len]).unwrap(),
-            loc: Provenance {
+            loc: Provenance::Span {
                 module: self.module,
                 start,
                 end: self.offset,
@@ -96,7 +96,7 @@ impl<'src> Lexer<'src> {
             }
             self.offset += s.len();
             return Some(Token {
-                loc: Provenance {
+                loc: Provenance::Span {
                 module: self.module,
                     start,
                     end: self.offset,
@@ -160,7 +160,7 @@ impl<'src> Lexer<'src> {
         Some(Token {
             kind: Tokenkind::String,
             text: std::str::from_utf8(&text[..len]).unwrap(),
-            loc: Provenance {
+            loc: Provenance::Span {
                 module: self.module,
                 start,
                 end: self.offset,
@@ -182,7 +182,7 @@ impl<'src> Lexer<'src> {
         Some(Token {
             kind: Tokenkind::Number,
             text: std::str::from_utf8(&text[..len]).unwrap(),
-            loc: Provenance {
+            loc: Provenance::Span {
                 module: self.module,
                 start,
                 end: self.offset,
@@ -204,7 +204,7 @@ impl<'src> Lexer<'src> {
         Some(Token {
             kind: Tokenkind::Name,
             text: std::str::from_utf8(&text[..len]).unwrap(),
-            loc: Provenance {
+            loc: Provenance::Span {
                 module: self.module,
                 start,
                 end: self.offset,

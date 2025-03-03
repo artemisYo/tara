@@ -2,6 +2,7 @@ pub mod parse;
 pub mod preimport;
 pub mod prescan;
 pub mod uir;
+pub mod typer;
 
 use crate::{
     ansi::Style,
@@ -14,6 +15,7 @@ pub struct Tara {
     pub entry: ModuleId,
     modules: Ivec<ModuleId, Module>,
     uir_items: Ivec<uir::Id, uir::Function>,
+    typecheck: Map<typer::In, Option<typer::Out>>,
     resolution: Map<uir::In, Option<uir::Out>>,
     parses: Map<parse::In, Option<parse::Out>>,
     prescans: Map<prescan::In, Option<prescan::Out>>,
@@ -32,6 +34,7 @@ impl Tara {
             modules,
             entry,
             uir_items: Default::default(),
+            typecheck: Default::default(),
             resolution: Default::default(),
             parses: Default::default(),
             prescans: Default::default(),
@@ -86,7 +89,7 @@ impl Tara {
     }
     pub fn eof_loc(&self, m: ModuleId) -> Provenance {
         let source = self.get_source(m);
-        Provenance {
+        Provenance::Span {
             module: m,
             start: source.len(),
             end: source.len(),
