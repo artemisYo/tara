@@ -1,14 +1,10 @@
 pub mod parse;
 pub mod preimport;
 pub mod prescan;
-pub mod uir;
 pub mod typer;
+pub mod uir;
 
-use crate::{
-    ansi::Style,
-    misc::{Indexer, Ivec},
-    MkIndexer, Provenance,
-};
+use crate::{ansi::Style, misc::{Ivec, Indexer}, report_simple, MkIndexer, Provenance};
 use std::{collections::BTreeMap as Map, path::PathBuf};
 
 pub struct Tara {
@@ -28,8 +24,15 @@ impl Tara {
         let mut src_dir: PathBuf = main.into();
         src_dir.pop();
         modules.push(Module::top_level(src_dir, top));
-        let entry =
-            modules.push(Module::from_file(main.into(), top).expect("TODO: gut error message"));
+        let Some(entry) = Module::from_file(main.into(), top) else {
+            report_simple(
+                Style::red().apply("Error"),
+                &format!("Could not read file '{}'!", main),
+                None
+            );
+            std::process::exit(1);
+        };
+        let entry = modules.push(entry);
         Self {
             modules,
             entry,
@@ -122,31 +125,22 @@ impl Module {
     fn from_file(path: PathBuf, parent: ModuleId) -> Option<Self> {
         let ppath: &std::path::Path = path.as_ref();
         if !ppath.exists() {
-            println!(
-                "[{}Error{}]: Attempted to read nonexistent file {:?}!",
-                Style::red(),
-                Style::default(),
-                &path
+            report_simple(
+                Style::red().apply("Error"),
+                &format!("Attempted to read nonexistent file {:?}!", &path),
+                None,
             );
             std::process::exit(1);
-        }
-        if !ppath.is_file() {
-            return None;
-        }
-        if ppath.extension()? != "tara" {
-            return None;
         }
 
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                println!(
-                    "[{}Error{}]: An error occurred while trying to read file {:?}!",
-                    Style::red(),
-                    Style::default(),
-                    &path
+                report_simple(
+                    Style::red().apply("Error"),
+                    &format!("An error occurred while trying to read file {:?}!", &path),
+                    Some(&format!("Error descriptor: {}", e))
                 );
-                println!("| {}", e);
                 std::process::exit(1);
             }
         };

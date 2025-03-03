@@ -42,6 +42,7 @@ pub struct Ast {
     pub funcs: Vec<Function>,
 }
 
+#[derive(Debug)]
 pub struct Function {
     pub loc: Provenance,
     pub name: Istr,
@@ -50,12 +51,12 @@ pub struct Function {
     pub body: Expr,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Type {
     pub loc: Provenance,
     pub kind: Typekind,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Typekind {
     Func { args: Box<Type>, ret: Box<Type> },
     Call { args: Box<Type>, func: Box<Type> },
@@ -68,7 +69,7 @@ impl Default for Typekind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Binding {
     Empty(Provenance),
     Name(Provenance, Istr, Option<Type>),
@@ -84,12 +85,12 @@ impl Binding {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub loc: Provenance,
     pub kind: Exprkind,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Exprkind {
     If(Box<[Expr; 3]>),
     Call(Box<[Expr; 2]>),
@@ -362,16 +363,6 @@ impl Parser<'_> {
     }
 
     fn type_op_right(&mut self, prec: u32, left: Type) -> Type {
-        if self.type_atom_first() {
-            let args = Box::new(self.type_atom());
-            return Type {
-                loc: left.loc.meet(&args.loc),
-                kind: Typekind::Call {
-                    args,
-                    func: Box::new(left),
-                },
-            };
-        }
         for o in self.ops.clone().iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
@@ -397,6 +388,16 @@ impl Parser<'_> {
                     },
                 };
             }
+        }
+        if self.type_atom_first() {
+            let args = Box::new(self.type_atom());
+            return Type {
+                loc: left.loc.meet(&args.loc),
+                kind: Typekind::Call {
+                    args,
+                    func: Box::new(left),
+                },
+            };
         }
         unreachable!("because loops on type_op_right_first()");
     }
@@ -612,13 +613,6 @@ impl Parser<'_> {
     }
 
     fn expr_op_right(&mut self, prec: u32, left: Expr) -> Expr {
-        if self.expr_atom_first() {
-            let args = self.expr_atom();
-            return Expr {
-                loc: left.loc.meet(&args.loc),
-                kind: Exprkind::Call(Box::new([left, args])),
-            };
-        }
         for o in self.ops.clone().iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
@@ -645,7 +639,14 @@ impl Parser<'_> {
                 };
             }
         }
-        unreachable!("because loops on type_op_right_first()");
+        if self.expr_atom_first() {
+            let args = self.expr_atom();
+            return Expr {
+                loc: left.loc.meet(&args.loc),
+                kind: Exprkind::Call(Box::new([left, args])),
+            };
+        }
+        unreachable!("because loops on expr_op_right_first()");
     }
 
     fn expr_atom_first(&self) -> bool {
@@ -836,7 +837,7 @@ impl Parser<'_> {
 
     fn report(&self, t: Option<Token<Istr>>, msg: &str) {
         let loc = t.map_or(self.ctx.eof_loc(self.m), |t| t.loc);
-        loc.report(
+        loc.report::<&str>(
             self.ctx,
             Style::red() | Style::underline(),
             Style::red().apply("Error"),

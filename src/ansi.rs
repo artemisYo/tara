@@ -6,7 +6,7 @@ impl std::fmt::Display for StyledStr<'_> {
     }
 }
 impl Style {
-    pub fn apply(self, t: &str) -> StyledStr<'_> {
+    pub const fn apply(self, t: &str) -> StyledStr<'_> {
         StyledStr(self, t)
     }
 }
@@ -41,10 +41,7 @@ impl std::ops::BitOr for Style {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        Self {
-            color: self.color.or(rhs.color),
-            underline: self.underline | rhs.underline,
-        }
+        self.merge(rhs)
     }
 }
 impl From<Color> for Style {
@@ -56,19 +53,38 @@ impl From<Color> for Style {
     }
 }
 impl Style {
-    pub fn red() -> Style {
-        Color::Red.into()
-    }
-    pub fn yellow() -> Style {
-        Color::Yellow.into()
-    }
-    pub fn cyan() -> Style {
-        Color::Cyan.into()
-    }
-    pub fn underline() -> Style {
+    pub const fn merge(self, other: Style) -> Style {
         Self {
+            color: if let Some(c) = self.color {
+                Some(c)
+            } else {
+                other.color
+            },
+            underline: self.underline | other.underline,
+        }
+    }
+    pub const fn red() -> Style {
+        Self {
+            color: Some(Color::Red),
+            underline: false,
+        }
+    }
+    pub const fn yellow() -> Style {
+        Self {
+            color: Some(Color::Yellow),
+            underline: false,
+        }
+    }
+    pub const fn cyan() -> Style {
+        Self {
+            color: Some(Color::Cyan),
+            underline: false,
+        }
+    }
+    pub const fn underline() -> Style {
+        Self {
+            color: None,
             underline: true,
-            ..Default::default()
         }
     }
 }

@@ -221,7 +221,7 @@ fn unexpected_token<S: AsRef<str>>(ctx: &Tara, loc: Provenance, sp: S, exps: &[T
         _ = write!(title, "but got '{}'!", sp.as_ref());
         title
     };
-    loc.report(
+    loc.report::<&str>(
         ctx,
         Style::red() | Style::underline(),
         Style::red().apply("Error"),

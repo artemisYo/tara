@@ -1,7 +1,8 @@
-use std::rc::Rc;
+use std::{fmt::Display, rc::Rc};
 
 use super::{preimport, ModuleId, Tara};
 use crate::{
+    ansi::Style,
     misc::{Indexer, Istr, Ivec, Svec},
     parse, MkIndexer, Provenance,
 };
@@ -105,25 +106,30 @@ pub struct Type {
     pub loc: Provenance,
     pub kind: Typekind,
 }
+impl Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
 impl Type {
     pub fn replace(&mut self, t: usize, by: &Type) {
         match &mut self.kind {
             Typekind::Func { args, ret } => {
                 args.replace(t, by);
                 ret.replace(t, by);
-            },
+            }
             Typekind::Call { args, func } => {
                 args.replace(t, by);
                 func.replace(t, by);
-            },
+            }
             Typekind::Bundle(items) => {
                 for i in items.iter_mut() {
                     i.replace(t, by);
                 }
-            },
+            }
             Typekind::Var(v) if t == *v => {
                 self.kind = by.kind.clone();
-            },
+            }
             _ => {}
         }
     }
@@ -135,11 +141,9 @@ impl Type {
     }
 
     pub fn unit(loc: Provenance) -> Type {
-        Type {
-            kind: Typekind::default(),
-            loc,
-        }
+        Self::tup(Vec::new(), loc)
     }
+
     pub fn tup(fields: Vec<Type>, loc: Provenance) -> Type {
         Type {
             kind: Typekind::Call {
@@ -182,6 +186,30 @@ impl Default for Typekind {
         Typekind::Bundle(Vec::new())
     }
 }
+impl Display for Typekind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Typekind::Func { args, ret } => write!(f, "func{}: {}", args, ret),
+            Typekind::Call { args, func } => write!(f, "{}{}", func, args),
+            Typekind::Bundle(items) => {
+                write!(f, "(")?;
+                if items.len() > 0 {
+                    write!(f, "{}", &items[0])?;
+                    for i in &items[0..] {
+                        write!(f, ", {}", i)?;
+                    }
+                }
+                write!(f, ")")
+            },
+            Typekind::Recall(istr) => write!(f, "{}", istr.0),
+            Typekind::Var(i) => write!(f, "?{}", i),
+            Typekind::String => write!(f, "string"),
+            Typekind::Bool => write!(f, "bool"),
+            Typekind::Int => write!(f, "int"),
+            Typekind::Tup => write!(f, "Tuple"),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Locals {
@@ -222,6 +250,7 @@ pub enum Exprkind {
     String(Istr),
     Bool(Istr),
     Arguments,
+    Poison,
 
     Let(BindingId, ExprId),
     Assign(BindingId, ExprId),
@@ -397,14 +426,23 @@ impl Context {
                     .map_or_else(|| self.new_typevar(e.loc), |&id| locals[id].typ.clone());
                 (typ, Exprkind::Bareblock(exprs))
             }
-            parse::Exprkind::Recall(istr) => {
-                let Some(&id) = self.names.find(&istr) else {
-                    panic!("TODO: Reporting\nName: {}\nCtx: {:?}", istr.0, self.names);
-                };
-                let typ =
-                    id.map_or_else(|e| ctx.uir_items[e].typ.clone(), |l| locals[l].typ.clone());
-                (typ, Exprkind::Recall(id))
-            }
+            parse::Exprkind::Recall(istr) => match self.names.find(&istr) {
+                Some(&id) => {
+                    let typ =
+                        id.map_or_else(|e| ctx.uir_items[e].typ.clone(), |l| locals[l].typ.clone());
+                    (typ, Exprkind::Recall(id))
+                }
+                _ => {
+                    e.loc.report::<&str>(
+                        ctx,
+                        Style::red() | Style::underline(),
+                        Style::red().apply("Error"),
+                        "Could not resolve the following name!",
+                        [].into_iter(),
+                    );
+                    (self.new_typevar(e.loc), Exprkind::Poison)
+                }
+            },
             parse::Exprkind::Number(istr) => (
                 Type {
                     loc: e.loc,
@@ -437,27 +475,65 @@ impl Context {
                 (Type::unit(e.loc), Exprkind::Let(binding, expr))
             }
             parse::Exprkind::Assign(istr, ref expr) => {
-                let bid = *self.names.find(&istr).expect("TODO: Reporting");
-                let bid = bid.expect("TODO: Reporting");
-                let expr = self.expressions(locals, ctx, expr);
-                (Type::unit(e.loc), Exprkind::Assign(bid, expr))
+                // TODO: reports here should get at the binding provenance, not the whole expr
+                match self.names.find(&istr) {
+                    Some(Ok(bid)) => {
+                        let bid = *bid;
+                        let expr = self.expressions(locals, ctx, expr);
+                        (Type::unit(e.loc), Exprkind::Assign(bid, expr))
+                    }
+                    Some(Err(gid)) => {
+                        e.loc.report(
+                            ctx,
+                            Provenance::RED_PTR,
+                            Provenance::ERROR,
+                            "The following name is not assignable!",
+                            [format!(
+                                "'{}' refers to a global item",
+                                ctx.uir_items[*gid].name.0
+                            )]
+                            .into_iter(),
+                        );
+                        self.expressions(locals, ctx, expr);
+                        (Type::unit(e.loc), Exprkind::Poison)
+                    }
+                    None => {
+                        e.loc.report::<&str>(
+                            ctx,
+                            Provenance::RED_PTR,
+                            Provenance::ERROR,
+                            "Could not resolve the following name!",
+                            [].into_iter(),
+                        );
+                        self.expressions(locals, ctx, expr);
+                        (Type::unit(e.loc), Exprkind::Poison)
+                    }
+                }
             }
-            parse::Exprkind::Break(None) => {
-                let &target = self.loops.last().expect("TODO: Reporting");
-                let expr = locals.push_expr(Expr {
-                    loc: e.loc,
-                    typ: Type::unit(e.loc),
-                    kind: Exprkind::default(),
-                });
-                (Type::unit(e.loc), Exprkind::Break { val: expr, target })
-            }
-            parse::Exprkind::Break(Some(ref expr)) => (
-                Type::unit(e.loc),
-                Exprkind::Break {
-                    val: self.expressions(locals, ctx, expr),
-                    target: *self.loops.last().expect("TODO: Reporting"),
-                },
-            ),
+            parse::Exprkind::Break(ref expr) => match self.loops.last() {
+                Some(&target) => {
+                    let val = if let Some(expr) = expr {
+                        self.expressions(locals, ctx, expr)
+                    } else {
+                        locals.push_expr(Expr {
+                            loc: e.loc,
+                            typ: Type::unit(e.loc),
+                            kind: Exprkind::default(),
+                        })
+                    };
+                    (Type::unit(e.loc), Exprkind::Break { val, target })
+                }
+                None => {
+                    e.loc.report::<&str>(
+                        ctx,
+                        Provenance::RED_PTR,
+                        Provenance::ERROR,
+                        "This break is not contained by any loops!",
+                        [].into_iter(),
+                    );
+                    (Type::unit(e.loc), Exprkind::Poison)
+                }
+            },
             parse::Exprkind::Return(None) => {
                 let expr = locals.push_expr(Expr {
                     loc: e.loc,

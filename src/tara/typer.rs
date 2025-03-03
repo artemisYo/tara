@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use crate::{report, Message};
+
 use super::{
     uir::{self, Expr, Function, Type, Typekind},
     Tara,
@@ -47,7 +49,7 @@ impl Context {
             f.typ.return_type().unwrap().clone(),
             body,
         ));
-        let substitutions = solve_constraints(self.constraints);
+        let substitutions = solve_constraints(ctx, self.constraints);
         Out {
             substitutions: substitutions.into(),
         }
@@ -55,6 +57,7 @@ impl Context {
 
     fn expressions(&mut self, ctx: &Tara, f: &Function, e: &Expr) -> Type {
         let typ = match e.kind {
+            uir::Exprkind::Poison => e.typ.clone(),
             uir::Exprkind::If { cond, smash, pass } => {
                 let cond_t = self.expressions(ctx, f, &f.locals[cond]);
                 self.constraints.push(Constraint::Unify(
@@ -122,11 +125,15 @@ impl Context {
                 Type::unit(e.loc)
             }
             uir::Exprkind::Assign(binding_id, expr_id) => {
-                match f.locals[binding_id].kind {
-                    uir::Bindkind::Name(_, m) => {
-                        assert!(m, "TODO: reporting\nimmutable stuff: {:#?}", f.locals[binding_id])
-                    },
-                    _ => {},
+                if let uir::Bindkind::Name(n, false) = f.locals[binding_id].kind {
+                    report(
+                        ctx,
+                        Message::error("Cannot reassign an immutable variable!", Some(e.loc)),
+                        &[Message::note(
+                            &format!("'{}' is declared here!", n.0),
+                            Some(f.locals[binding_id].loc),
+                        )],
+                    );
                 }
                 let bind = f.locals[binding_id].typ.clone();
                 let expr = self.expressions(ctx, f, &f.locals[expr_id]);
@@ -157,7 +164,7 @@ impl Context {
     }
 }
 
-fn solve_constraints(mut cs: Vec<Constraint>) -> Vec<(usize, Type)> {
+fn solve_constraints(ctx: &Tara, mut cs: Vec<Constraint>) -> Vec<(usize, Type)> {
     let mut out = Vec::new();
     while let Some(c) = cs.pop() {
         match c {
@@ -223,8 +230,16 @@ fn solve_constraints(mut cs: Vec<Constraint>) -> Vec<(usize, Type)> {
                 cs.push(Constraint::Unify(*r1, *r2));
             }
             Constraint::Unify(a, b) if a != b => {
-                eprintln!("types could not be unified!\na: {:#?}\nb: {:#?}", a, b);
-                todo!("TODO: Reporting")
+                report(
+                    ctx,
+                    Message::error("Could not unify types!", None),
+                    &[
+                        Message::note(&format!("Type '{}' originates here:", a), Some(a.loc)),
+                        Message::note(&format!("Type '{}' originates here:", b), Some(b.loc))
+                    ],
+                );
+                // TODO: poisoning or smt
+                std::process::exit(1);
             }
             Constraint::Unify(a, b) => unreachable!("huh?\na: {a:#?}\nb: {b:#?}"),
         }
