@@ -132,6 +132,13 @@ impl Type {
             _ => {}
         }
     }
+
+    pub fn argument_type(&self) -> Option<&Type> {
+        match self.kind {
+            Typekind::Func { ref args, .. } => Some(args),
+            _ => None,
+        }
+    }
     pub fn return_type(&self) -> Option<&Type> {
         match self.kind {
             Typekind::Func { ref ret, .. } => Some(ret),
@@ -348,7 +355,7 @@ impl Context {
         let block = self.expressions(&mut locals, ctx, &f.body);
         let args = locals.push_expr(Expr {
             loc: f.args.loc(),
-            typ: ctx.uir_items[out].typ.return_type().unwrap().clone(),
+            typ: ctx.uir_items[out].typ.argument_type().unwrap().clone(),
             kind: Exprkind::Arguments,
         });
         let args = locals.push_expr(Expr {
@@ -633,6 +640,7 @@ impl Context {
                 parse::Typekind::Recall(istr) if *istr == "int".into() => Typekind::Int,
                 parse::Typekind::Recall(istr) if *istr == "string".into() => Typekind::String,
                 parse::Typekind::Recall(istr) if *istr == "bool".into() => Typekind::Bool,
+                parse::Typekind::Recall(istr) if *istr == "tuple".into() => Typekind::Tup,
                 parse::Typekind::Recall(istr) => Typekind::Recall(*istr),
             },
         }

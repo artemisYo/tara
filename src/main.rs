@@ -294,4 +294,10 @@ fn main() {
     for (a, b) in subst.substitutions.iter() {
         println!("?{} := {}", a, b);
     }
+
+    for i in resolution.items.iter() {
+        ctx.typeck(typer::In {
+            i: *i,
+        });
+    }
 }

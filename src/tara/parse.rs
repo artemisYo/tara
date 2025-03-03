@@ -55,6 +55,23 @@ pub struct Type {
     pub loc: Provenance,
     pub kind: Typekind,
 }
+impl Type {
+    pub fn unit(loc: Provenance) -> Self {
+        Type {
+            kind: Typekind::Call {
+                args: Box::new(Type {
+                    kind: Typekind::Bundle(Vec::new()),
+                    loc,
+                }),
+                func: Box::new(Type {
+                    kind: Typekind::Recall("tuple".into()),
+                    loc,
+                }),
+            },
+            loc,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub enum Typekind {
     Func { args: Box<Type>, ret: Box<Type> },
@@ -221,10 +238,7 @@ impl Parser<'_> {
         let ret = if self.check(Tokenkind::Colon).is_some() {
             self.type_()
         } else {
-            Type {
-                loc: args.loc(),
-                kind: Default::default(),
-            }
+            Type::unit(args.loc())
         };
         let body = if self.check(Tokenkind::Equals).is_some() {
             self.expr_delimited()
@@ -298,10 +312,7 @@ impl Parser<'_> {
         let ret = if self.check(Tokenkind::Colon).is_some() {
             self.type_()
         } else {
-            Type {
-                loc: args.loc,
-                kind: Default::default(),
-            }
+            Type::unit(args.loc)
         };
         let ret = Box::new(ret);
         let loc = loc.meet(&ret.loc);
