@@ -430,12 +430,10 @@ impl Context {
                     (typ, Exprkind::Recall(id))
                 }
                 _ => {
-                    e.loc.report::<&str>(
+                    report(
                         ctx,
-                        Style::red() | Style::underline(),
-                        Style::red().apply("Error"),
-                        "Could not resolve the following name!",
-                        [].into_iter(),
+                        Message::error("Could not resolve the following name!", Some(e.loc)),
+                        &[],
                     );
                     (self.new_typevar(e.loc), Exprkind::Poison)
                 }
@@ -520,12 +518,10 @@ impl Context {
                     (Type::unit(e.loc), Exprkind::Break { val, target })
                 }
                 None => {
-                    e.loc.report::<&str>(
+                    report(
                         ctx,
-                        Provenance::RED_PTR,
-                        Provenance::ERROR,
-                        "This break is not contained by any loops!",
-                        [].into_iter(),
+                        Message::error("This break is not contained by any loops!", Some(e.loc)),
+                        &[],
                     );
                     (Type::unit(e.loc), Exprkind::Poison)
                 }

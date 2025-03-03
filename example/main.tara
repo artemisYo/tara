@@ -19,7 +19,7 @@ func main(): int {
     operator(3, &&, 4);
     let out = 5;
     out = 5;
-    fib = 5;
+    fib = 5
     fuck = fuck;
     fib(5)
 }

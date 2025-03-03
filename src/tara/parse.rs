@@ -2,11 +2,10 @@ use std::fmt::Write;
 use std::rc::Rc;
 
 use crate::{
-    ansi::Style,
     misc::Istr,
-    preimport, prescan,
+    preimport, prescan, report,
     tokens::{Token, Tokenkind},
-    Provenance,
+    Message, Provenance,
 };
 
 use super::{prescan::Opdef, ModuleId, Tara};
@@ -185,15 +184,15 @@ impl Parser<'_> {
 
     fn eat(&mut self) -> Token<Istr> {
         if self.tokens.is_empty() {
-            self.report(None, "Unexpected 'EOF'!");
+            self.unexpected_token(None, &[], &[]);
         }
         let out = self.tokens[0];
         self.tokens = &self.tokens[1..];
         out
     }
-    fn expect(&mut self, k: Tokenkind) -> Token<Istr> {
+    fn expect(&mut self, k: Tokenkind, notes: &[Message]) -> Token<Istr> {
         if !self.next_is(k) {
-            self.unexpected_token(self.peek(), &[k]);
+            self.unexpected_token(self.peek(), &[k], notes);
             std::process::exit(1);
         }
         self.eat()
@@ -210,14 +209,14 @@ impl Parser<'_> {
     fn decls(&mut self) -> Function {
         let cases = &[Tokenkind::Func];
         self.dispatch(cases, &mut [&mut Self::function], |s| {
-            s.unexpected_token(s.peek(), cases);
+            s.unexpected_token(s.peek(), cases, &[]);
             std::process::exit(1)
         })
     }
 
     fn function(&mut self) -> Function {
-        let loc = self.expect(Tokenkind::Func).loc;
-        let name = self.expect(Tokenkind::Name);
+        let loc = self.expect(Tokenkind::Func, &[]).loc;
+        let name = self.expect(Tokenkind::Name, &[]);
         let args = self.binding_parenthesised();
         let ret = if self.check(Tokenkind::Colon).is_some() {
             self.type_()
@@ -257,7 +256,7 @@ impl Parser<'_> {
     }
 
     fn binding_name(&mut self) -> Binding {
-        let name = self.expect(Tokenkind::Name);
+        let name = self.expect(Tokenkind::Name, &[]);
         let mut loc = name.loc;
         let typ = if self.check(Tokenkind::Colon).is_some() {
             let t = self.type_();
@@ -270,7 +269,7 @@ impl Parser<'_> {
     }
 
     fn binding_parenthesised(&mut self) -> Binding {
-        let loc = self.expect(Tokenkind::OpenParen).loc;
+        let loc = self.expect(Tokenkind::OpenParen, &[]).loc;
         let mut fields = Vec::new();
         if !self.next_is(Tokenkind::CloseParen) {
             fields.push(self.binding());
@@ -278,7 +277,7 @@ impl Parser<'_> {
                 fields.push(self.binding());
             }
         }
-        let loc = loc.meet(&self.expect(Tokenkind::CloseParen).loc);
+        let loc = loc.meet(&self.expect(Tokenkind::CloseParen, &[]).loc);
         match fields.len() {
             0 => Binding::Empty(loc),
             1 => fields.pop().unwrap(),
@@ -294,7 +293,7 @@ impl Parser<'_> {
     }
 
     fn type_func(&mut self) -> Type {
-        let loc = self.expect(Tokenkind::Func).loc;
+        let loc = self.expect(Tokenkind::Func, &[]).loc;
         let args = Box::new(self.type_parenthesised());
         let ret = if self.check(Tokenkind::Colon).is_some() {
             self.type_()
@@ -343,7 +342,7 @@ impl Parser<'_> {
                 };
             }
         }
-        self.report(self.peek(), "Unexpected token!");
+        self.unexpected_token(self.peek(), &[], &[]);
         std::process::exit(1);
     }
 
@@ -410,7 +409,7 @@ impl Parser<'_> {
         if self.next_is(Tokenkind::OpenParen) {
             self.type_parenthesised()
         } else {
-            let t = self.expect(Tokenkind::Name);
+            let t = self.expect(Tokenkind::Name, &[]);
             Type {
                 loc: t.loc,
                 kind: Typekind::Recall(t.text),
@@ -419,13 +418,13 @@ impl Parser<'_> {
     }
 
     fn type_parenthesised(&mut self) -> Type {
-        let loc = self.expect(Tokenkind::OpenParen).loc;
+        let loc = self.expect(Tokenkind::OpenParen, &[]).loc;
         let mut fields = Vec::new();
         if !self.next_is(Tokenkind::CloseParen) {
             fields.push(self.type_());
             if self.check(Tokenkind::Semicolon).is_some() {
                 let t = fields.pop().unwrap();
-                let n = self.expect(Tokenkind::Number);
+                let n = self.expect(Tokenkind::Number, &[]);
                 for _ in 0..n.text.parse::<usize>().unwrap() {
                     fields.push(t.clone());
                 }
@@ -434,14 +433,14 @@ impl Parser<'_> {
                 fields.push(self.type_());
                 if self.check(Tokenkind::Semicolon).is_some() {
                     let t = fields.pop().unwrap();
-                    let n = self.expect(Tokenkind::Number);
+                    let n = self.expect(Tokenkind::Number, &[]);
                     for _ in 0..n.text.parse::<usize>().unwrap() {
                         fields.push(t.clone());
                     }
                 }
             }
         }
-        let loc = loc.meet(&self.expect(Tokenkind::CloseParen).loc);
+        let loc = loc.meet(&self.expect(Tokenkind::CloseParen, &[]).loc);
         match fields.len() {
             1 => fields.pop().unwrap(),
             _ => Type {
@@ -473,7 +472,7 @@ impl Parser<'_> {
             ],
             |s| {
                 let e = s.expr_inline();
-                s.expect(Tokenkind::Semicolon);
+                s.expect(Tokenkind::Semicolon, &[]);
                 e
             },
         )
@@ -501,14 +500,14 @@ impl Parser<'_> {
                 &mut Self::expr_bareblock,
             ],
             |s| {
-                s.unexpected_token(s.peek(), cases);
+                s.unexpected_token(s.peek(), cases, &[]);
                 std::process::exit(1);
             },
         )
     }
 
     fn expr_if(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::If).loc;
+        let loc = self.expect(Tokenkind::If, &[]).loc;
         let cond = self.expr_any();
         let smash = self.expr_block();
         let pass = if self.check(Tokenkind::Else).is_some() {
@@ -527,7 +526,7 @@ impl Parser<'_> {
     }
 
     fn expr_loop(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::Loop).loc;
+        let loc = self.expect(Tokenkind::Loop, &[]).loc;
         let body = self.expr_block();
         let loc = loc.meet(&body.loc);
         Expr {
@@ -537,7 +536,7 @@ impl Parser<'_> {
     }
 
     fn expr_bareblock(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::OpenBrace).loc;
+        let loc = self.expect(Tokenkind::OpenBrace, &[]).loc;
         let mut body = Vec::new();
         while !self.next_is(Tokenkind::CloseBrace) {
             let e = self.statement();
@@ -551,7 +550,14 @@ impl Parser<'_> {
                 break;
             }
         }
-        let loc = loc.meet(&self.expect(Tokenkind::CloseBrace).loc);
+        let loc = loc.meet(
+            &self
+                .expect(
+                    Tokenkind::CloseBrace,
+                    &[Message::note("Maybe a missing semicolon?", None)],
+                )
+                .loc,
+        );
         Expr {
             loc,
             kind: Exprkind::Bareblock(body),
@@ -593,7 +599,7 @@ impl Parser<'_> {
                 };
             }
         }
-        self.report(self.peek(), "Unexpected token!");
+        self.unexpected_token(self.peek(), &[], &[]);
         std::process::exit(1);
     }
 
@@ -661,9 +667,7 @@ impl Parser<'_> {
         use Tokenkind::*;
         let t = self.peek();
         match t.map(|t| t.kind) {
-            Some(OpenParen) => {
-                self.expr_parenthesised()
-            }
+            Some(OpenParen) => self.expr_parenthesised(),
             Some(Name) => {
                 let t = self.eat();
                 Expr {
@@ -693,20 +697,20 @@ impl Parser<'_> {
                 }
             }
             _ => {
-                self.unexpected_token(t, &[OpenParen, Name, String, Number, Bool]);
+                self.unexpected_token(t, &[OpenParen, Name, String, Number, Bool], &[]);
                 std::process::exit(1);
             }
         }
     }
 
     fn expr_parenthesised(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::OpenParen).loc;
+        let loc = self.expect(Tokenkind::OpenParen, &[]).loc;
         let mut fields = Vec::new();
         if !self.next_is(Tokenkind::CloseParen) {
             fields.push(self.expr_any());
             if self.check(Tokenkind::Semicolon).is_some() {
                 let t = fields.pop().unwrap();
-                let n = self.expect(Tokenkind::Number);
+                let n = self.expect(Tokenkind::Number, &[]);
                 for _ in 0..n.text.parse::<usize>().unwrap() {
                     fields.push(t.clone());
                 }
@@ -715,14 +719,14 @@ impl Parser<'_> {
                 fields.push(self.expr_any());
                 if self.check(Tokenkind::Semicolon).is_some() {
                     let t = fields.pop().unwrap();
-                    let n = self.expect(Tokenkind::Number);
+                    let n = self.expect(Tokenkind::Number, &[]);
                     for _ in 0..n.text.parse::<usize>().unwrap() {
                         fields.push(t.clone());
                     }
                 }
             }
         }
-        let loc = loc.meet(&self.expect(Tokenkind::CloseParen).loc);
+        let loc = loc.meet(&self.expect(Tokenkind::CloseParen, &[]).loc);
         match fields.len() {
             1 => fields.pop().unwrap(),
             _ => Expr {
@@ -757,9 +761,9 @@ impl Parser<'_> {
     }
 
     fn statement_let(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::Let).loc;
+        let loc = self.expect(Tokenkind::Let, &[]).loc;
         let binding = self.binding();
-        self.expect(Tokenkind::Equals);
+        self.expect(Tokenkind::Equals, &[]);
         let init = self.expr_any();
         let loc = loc.meet(&init.loc);
         Expr {
@@ -769,9 +773,9 @@ impl Parser<'_> {
     }
 
     fn statement_mut(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::Mut).loc;
+        let loc = self.expect(Tokenkind::Mut, &[]).loc;
         let binding = self.binding();
-        self.expect(Tokenkind::Equals);
+        self.expect(Tokenkind::Equals, &[]);
         let init = self.expr_any();
         let loc = loc.meet(&init.loc);
         Expr {
@@ -781,7 +785,7 @@ impl Parser<'_> {
     }
 
     fn statement_break(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::Break).loc;
+        let loc = self.expect(Tokenkind::Break, &[]).loc;
         let val = if self.next_is(Tokenkind::Semicolon) {
             None
         } else {
@@ -795,7 +799,7 @@ impl Parser<'_> {
     }
 
     fn statement_return(&mut self) -> Expr {
-        let loc = self.expect(Tokenkind::Return).loc;
+        let loc = self.expect(Tokenkind::Return, &[]).loc;
         let val = if self.next_is(Tokenkind::Semicolon) {
             None
         } else {
@@ -809,9 +813,9 @@ impl Parser<'_> {
     }
 
     fn statement_assign(&mut self) -> Expr {
-        let name = self.expect(Tokenkind::Name);
+        let name = self.expect(Tokenkind::Name, &[]);
         let loc = name.loc;
-        self.expect(Tokenkind::Equals);
+        self.expect(Tokenkind::Equals, &[]);
         let val = self.expr_any();
         let loc = loc.meet(&val.loc);
         Expr {
@@ -820,29 +824,21 @@ impl Parser<'_> {
         }
     }
 
-    fn unexpected_token(&self, t: Option<Token<Istr>>, exps: &[Tokenkind]) {
+    fn unexpected_token(&self, t: Option<Token<Istr>>, exps: &[Tokenkind], notes: &[Message]) {
         let spell = t.map_or("EOF", |t| t.kind.spelling());
-        let title = if exps.len() == 1 {
-            format!("Expected '{}', but got '{}'!", exps[0].spelling(), spell)
-        } else {
-            let mut title = String::from("Expected one of ");
-            for e in exps {
-                _ = write!(title, "'{}', ", e.spelling());
+        let title = match exps.len() {
+            0 => format!("Unexpected token '{}'!", spell),
+            1 => format!("Expected '{}', but got '{}'!", exps[0].spelling(), spell),
+            _ => {
+                let mut title = String::from("Expected one of ");
+                for e in exps {
+                    _ = write!(title, "'{}', ", e.spelling());
+                }
+                _ = write!(title, "but got '{}'!", spell);
+                title
             }
-            _ = write!(title, "but got '{}'!", spell);
-            title
         };
-        self.report(t, &title);
-    }
-
-    fn report(&self, t: Option<Token<Istr>>, msg: &str) {
         let loc = t.map_or(self.ctx.eof_loc(self.m), |t| t.loc);
-        loc.report::<&str>(
-            self.ctx,
-            Style::red() | Style::underline(),
-            Style::red().apply("Error"),
-            msg,
-            [].into_iter(),
-        );
+        report(self.ctx, Message::error(&title, Some(loc)), notes);
     }
 }

@@ -57,6 +57,7 @@ impl Provenance {
         &self,
         ctx: &Tara,
         pointer: Style,
+        surround: usize,
     ) -> (usize, impl Iterator<Item = (String, String)>) {
         let Provenance::Span {
             module: span_module,
@@ -68,11 +69,19 @@ impl Provenance {
         let Some(start) = src.get(..span_start) else {
             todo!();
         };
-        let start = start.rfind("\n").map(|n| n + 1).unwrap_or(0);
+        let start = start
+            .rmatch_indices("\n")
+            .nth(surround)
+            .map(|(n, _)| n + 1)
+            .unwrap_or(0);
         let Some(end) = src.get(span_end..) else {
             todo!();
         };
-        let end = end.find("\n").map(|n| span_end + n).unwrap_or(src.len());
+        let end = end
+            .match_indices("\n")
+            .nth(surround)
+            .map(|(n, _)| span_end + n)
+            .unwrap_or(src.len());
         let text = &src[start..end];
 
         let digits = start.checked_ilog10().unwrap_or(0) + 1;
@@ -87,7 +96,7 @@ impl Provenance {
                     Some((start, l))
                 })
                 .map(move |(start, line)| {
-                    let hl_start = span_start.saturating_sub(start);
+                    let hl_start = span_start.saturating_sub(start).min(line.len());
                     let hl_end = span_end.saturating_sub(start).min(line.len());
                     let pretext = &line[0..hl_start];
                     let text = &line[hl_start..hl_end];
@@ -103,37 +112,6 @@ impl Provenance {
                     )
                 }),
         )
-    }
-
-    pub fn report<S: AsRef<str>>(
-        &self,
-        ctx: &Tara,
-        pointer: Style,
-        kind: StyledStr,
-        title: &str,
-        notes: impl Iterator<Item = S>,
-    ) {
-        let notes = notes.peekable();
-        println!("╭─[{}]@{}: {}", kind, self.source(ctx), title);
-        let (digits, iter) = self.line_of(ctx, pointer);
-        for (off, line) in iter {
-            println!("│ {:digits$} │ {}", off, line);
-        }
-        for n in notes {
-            let mut lines = n.as_ref().lines();
-            let Some(first) = lines.next() else {
-                continue;
-            };
-            println!("├─[{}]: {}", Style::yellow().apply("Note"), first);
-            for l in lines {
-                println!("│    {}", l);
-            }
-        }
-        print!("╰──");
-        for _ in 0..digits {
-            print!("─");
-        }
-        println!("╯");
     }
 }
 
@@ -185,23 +163,23 @@ pub fn report(ctx: &Tara, head: Message, extra: &[Message]) {
     let mut digits = extra
         .iter()
         .filter_map(|m| Some((m.span?, m.pointer)))
-        .map(|(s, p)| s.line_of(ctx, p).0)
+        .map(|(s, p)| s.line_of(ctx, p, 1).0)
         .max()
         .unwrap_or(0);
     if let Some(span) = head.span {
-        let (ds, iter) = span.line_of(ctx, head.pointer);
+        let (ds, iter) = span.line_of(ctx, head.pointer, 1);
         digits = ds.max(digits);
         for (off, line) in iter {
-            println!("│ {:digits$} │ {}", off, line);
+            println!("│ {:>digits$} │ {}", off, line);
         }
     }
     for e in extra {
         print!("├─");
         e.print_header(ctx);
         if let Some(span) = e.span {
-            let (_, iter) = span.line_of(ctx, e.pointer);
+            let (_, iter) = span.line_of(ctx, e.pointer, 1);
             for (off, line) in iter {
-                println!("│ {:digits$} │ {}", off, line);
+                println!("│ {:>digits$} │ {}", off, line);
             }
         }
     }
@@ -214,77 +192,85 @@ pub fn report(ctx: &Tara, head: Message, extra: &[Message]) {
 
 fn main() {
     let mut ctx = Tara::from("example/main.tara");
-    Provenance::Span {
-        module: ctx.entry,
-        start: 0,
-        end: ctx.get_source(ctx.entry).len(),
-    }
-    .report::<&str>(
+    report(
         &ctx,
-        Style::default(),
-        Style::yellow().apply("Cat"),
-        "",
-        [].into_iter(),
+        Message {
+            span: Some(Provenance::Span {
+                module: ctx.entry,
+                start: 0,
+                end: ctx.get_source(ctx.entry).len(),
+            }),
+            pointer: Style::default(),
+            kind: Style::yellow().apply("Cat"),
+            title: ""
+        },
+        &[],
     );
 
     let pi = ctx.preimport(preimport::In { m: ctx.entry });
     let imports: Vec<_> = pi.imports.iter().map(|o| format!("{o:?}")).collect();
-    let ops: Vec<_> = pi.ops.iter().map(|o| format!("{o:?}")).collect();
-    Provenance::Span {
-        module: ctx.entry,
-        start: 0,
-        end: 0,
-    }
-    .report(
+    // let ops: Vec<_> = pi.ops.iter().map(|o| format!("{o:?}")).collect();
+    report(
         &ctx,
-        Style::default(),
-        Style::yellow().apply("Ops"),
-        "",
-        ops.iter(),
+        Message {
+            span: None,
+            pointer: Style::default(),
+            kind: Style::yellow().apply("Ops"),
+            title: "",
+        },
+        pi.ops.iter().map(|o| Message {
+            span: Some(o.loc),
+            pointer: Style::underline(),
+            kind: Style::yellow().apply("Operator"),
+            title: "",
+        }).collect::<Vec<_>>().as_ref()
     );
-    Provenance::Span {
-        module: ctx.entry,
-        start: 0,
-        end: 0,
-    }
-    .report(
+    report(
         &ctx,
-        Style::default(),
-        Style::yellow().apply("Ops"),
-        "",
-        imports.iter(),
+        Message {
+            span: None,
+            pointer: Style::default(),
+            kind: Style::yellow().apply("Imports"),
+            title: "",
+        },
+        imports.iter().map(|i| Message {
+            span: None,
+            pointer: Style::default(),
+            kind: Style::yellow().apply("Import"),
+            title: &i,
+        }).collect::<Vec<_>>().as_ref()
     );
 
     let parse = ctx.parse(parse::In { m: ctx.entry });
     for f in &parse.ast.funcs {
-        f.loc.report::<&str>(
-            &ctx,
-            Style::default(),
-            Style::yellow().apply("Func"),
-            "This is a print out of a function",
-            [].into_iter(),
-        );
-        f.args.loc().report::<&str>(
-            &ctx,
-            Style::underline(),
-            Style::yellow().apply("Binding"),
-            "These are the functions args",
-            [].into_iter(),
-        );
-        f.ret.loc.report::<&str>(
-            &ctx,
-            Style::underline(),
-            Style::yellow().apply("Type"),
-            "This is the functions return type",
-            [].into_iter(),
-        );
-        f.body.loc.report::<&str>(
-            &ctx,
-            Style::underline(),
-            Style::yellow().apply("Expr"),
-            "This is the functions body",
-            [].into_iter(),
-        );
+        // f.loc.report::<&str>(
+        //     &ctx,
+        //     Style::default(),
+        //     Style::yellow().apply("Func"),
+        //     "This is a print out of a function",
+        //     [].into_iter(),
+        // );
+        // f.args.loc().report::<&str>(
+        //     &ctx,
+        //     Style::underline(),
+        //     Style::yellow().apply("Binding"),
+        //     "These are the functions args",
+        //     [].into_iter(),
+        // );
+        // f.ret.loc.report::<&str>(
+        //     &ctx,
+        //     Style::underline(),
+        //     Style::yellow().apply("Type"),
+        //     "This is the functions return type",
+        //     [].into_iter(),
+        // );
+        // f.body.loc.report::<&str>(
+        //     &ctx,
+        //     Style::underline(),
+        //     Style::yellow().apply("Expr"),
+        //     "This is the functions body",
+        //     [].into_iter(),
+        // );
         if f.name.0 == "main" {
             println!("{:#?}", f);
         }

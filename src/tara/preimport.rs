@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use crate::{ansi::Style, misc::Istr, prescan::Opdef, tara::prescan, ModuleId, Tara};
+use crate::{
+    ansi::Style, misc::Istr, prescan::Opdef, report, tara::prescan, Message, ModuleId, Tara,
+};
 
 #[derive(Debug)]
 pub struct Import {
@@ -41,12 +43,13 @@ fn preimport(ctx: &mut Tara, i: In) -> Out {
     let mut prescan = ctx.prescan(prescan::In { m: i.m });
     for (loc, path) in prescan.imports.as_ref() {
         if path.len() < 2 {
-            loc.meet(&path.first().map_or(*loc, |t| t.0)).report(
+            report(
                 ctx,
-                Style::yellow() | Style::underline(),
-                Style::yellow().apply("Note"),
-                "This import does nothing!",
-                ["Remove the import"].into_iter(),
+                Message::note(
+                    "This import does nothing!",
+                    Some(loc.meet(&path.first().map_or(*loc, |t| t.0))),
+                ),
+                &[Message::note("Remove the import", None)],
             );
             continue;
         }
