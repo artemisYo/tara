@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    ansi::Style, misc::Istr, prescan::Opdef, report, tara::prescan, Message, ModuleId, Tara,
+    misc::Istr, prescan::Opdef, report, tara::prescan, Message, ModuleId, Tara,
 };
 
 #[derive(Debug)]

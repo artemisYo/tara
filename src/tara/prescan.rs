@@ -3,7 +3,6 @@ use std::{fmt::Write, rc::Rc};
 
 use crate::misc::Istr;
 use crate::{
-    ansi::Style,
     tokens::{Token, Tokenkind},
     ModuleId, Provenance, Tara,
 };

@@ -2,7 +2,6 @@ use std::{fmt::Display, rc::Rc};
 
 use super::{preimport, ModuleId, Tara};
 use crate::{
-    ansi::Style,
     misc::{Indexer, Istr, Ivec, Svec},
     parse, report, Message, MkIndexer, Provenance,
 };

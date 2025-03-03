@@ -237,7 +237,7 @@ fn main() {
             span: None,
             pointer: Style::default(),
             kind: Style::yellow().apply("Import"),
-            title: &i,
+            title: i,
         }).collect::<Vec<_>>().as_ref()
     );
 
@@ -291,5 +291,7 @@ fn main() {
     let subst = ctx.typeck(typer::In {
         i: main_id.unwrap(),
     });
-    // println!("{:#?}", subst.substitutions);
+    for (a, b) in subst.substitutions.iter() {
+        println!("?{} := {}", a, b);
+    }
 }
