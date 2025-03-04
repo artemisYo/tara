@@ -243,35 +243,7 @@ fn main() {
 
     let parse = ctx.parse(parse::In { m: ctx.entry });
     for f in &parse.ast.funcs {
-        // f.loc.report::<&str>(
-        //     &ctx,
-        //     Style::default(),
-        //     Style::yellow().apply("Func"),
-        //     "This is a print out of a function",
-        //     [].into_iter(),
-        // );
-        // f.args.loc().report::<&str>(
-        //     &ctx,
-        //     Style::underline(),
-        //     Style::yellow().apply("Binding"),
-        //     "These are the functions args",
-        //     [].into_iter(),
-        // );
-        // f.ret.loc.report::<&str>(
-        //     &ctx,
-        //     Style::underline(),
-        //     Style::yellow().apply("Type"),
-        //     "This is the functions return type",
-        //     [].into_iter(),
-        // );
-        // f.body.loc.report::<&str>(
-        //     &ctx,
-        //     Style::underline(),
-        //     Style::yellow().apply("Expr"),
-        //     "This is the functions body",
-        //     [].into_iter(),
-        // );
-        if f.name.0 == "main" {
+        if f.name.name.0 == "main" {
             println!("{:#?}", f);
         }
     }
@@ -280,11 +252,10 @@ fn main() {
     let mut main_id = None;
     for i in resolution.items.iter() {
         let uir = ctx.get_uir(*i);
-        if uir.name.0 != "main" {
+        if uir.name.name.0 != "main" {
             continue;
         }
         main_id = Some(*i);
-        // println!("Locals of uir item 'main':\n{:#?}", uir.locals);
         break;
     }
 

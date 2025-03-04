@@ -17,12 +17,13 @@
       in rec {
         # For `nix build` & `nix run`:
         defaultPackage = naersk'.buildPackage {
+          nativeBuildInputs = [ pkgs.llvmPackages_18.libllvm ];
           src = ./.;
         };
 
         # For `nix develop`:
         devShell = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [ rustc cargo rust-analyzer clippy rustfmt ];
+          nativeBuildInputs = with pkgs; [ rustc cargo rust-analyzer clippy rustfmt llvmPackages_18.libllvm ];
         };
       }
     );

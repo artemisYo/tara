@@ -41,10 +41,16 @@ pub struct Ast {
     pub funcs: Vec<Function>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Ident {
+    pub name: Istr,
+    pub loc: Provenance,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub loc: Provenance,
-    pub name: Istr,
+    pub name: Ident,
     pub ret: Type,
     pub args: Binding,
     pub body: Expr,
@@ -120,7 +126,7 @@ pub enum Exprkind {
 
     Let(Binding, Box<Expr>),
     Mut(Binding, Box<Expr>),
-    Assign(Istr, Box<Expr>),
+    Assign(Ident, Box<Expr>),
     Break(Option<Box<Expr>>),
     Return(Option<Box<Expr>>),
     Const(Box<Expr>),
@@ -250,7 +256,10 @@ impl Parser<'_> {
         let loc = loc.meet(&body.loc);
         Function {
             loc,
-            name: name.text,
+            name: Ident {
+                name: name.text,
+                loc: name.loc,
+            },
             ret,
             args,
             body,
@@ -829,9 +838,13 @@ impl Parser<'_> {
         self.expect(Tokenkind::Equals, &[]);
         let val = self.expr_any();
         let loc = loc.meet(&val.loc);
+        let name = Ident {
+            name: name.text,
+            loc: name.loc,
+        };
         Expr {
             loc,
-            kind: Exprkind::Assign(name.text, Box::new(val)),
+            kind: Exprkind::Assign(name, Box::new(val)),
         }
     }
 

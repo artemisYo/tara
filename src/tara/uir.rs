@@ -1,6 +1,6 @@
 use std::{fmt::Display, rc::Rc};
 
-use super::{preimport, ModuleId, Tara};
+use super::{parse::Ident, preimport, ModuleId, Tara};
 use crate::{
     misc::{Indexer, Istr, Ivec, Svec},
     parse, report, Message, MkIndexer, Provenance,
@@ -94,7 +94,7 @@ impl std::ops::Index<BindingId> for LocalVec {
 
 pub struct Function {
     pub loc: Provenance,
-    pub name: Istr,
+    pub name: Ident,
     pub typ: Type,
     pub body: ExprId,
     pub locals: LocalVec,
@@ -306,15 +306,15 @@ impl Context {
             let items = ctx.resolve(In { m: i.target }).items;
             if let Some(decl) = i.head {
                 for &id in items.iter() {
-                    if ctx.uir_items[id].name == decl {
+                    if ctx.uir_items[id].name.name == decl {
                         continue;
                     }
-                    self.names.insert(ctx.uir_items[id].name, Err(id));
+                    self.names.insert(ctx.uir_items[id].name.name, Err(id));
                     break;
                 }
             } else {
                 for &id in items.iter() {
-                    self.names.insert(ctx.uir_items[id].name, Err(id));
+                    self.names.insert(ctx.uir_items[id].name.name, Err(id));
                 }
             }
         }
@@ -339,7 +339,7 @@ impl Context {
                 locals,
             });
             items.push(id);
-            self.names.insert(f.name, Err(id));
+            self.names.insert(f.name.name, Err(id));
         }
         for (f, &id) in ast.ast.funcs.iter().zip(items.iter()) {
             self.functions(ctx, f, id);
@@ -477,7 +477,7 @@ impl Context {
             }
             parse::Exprkind::Assign(istr, ref expr) => {
                 // TODO: reports here should get at the binding provenance, not the whole expr
-                match self.names.find(&istr) {
+                match self.names.find(&istr.name) {
                     Some(Ok(bid)) => {
                         let bid = *bid;
                         let expr = self.expressions(locals, ctx, expr);
@@ -486,14 +486,14 @@ impl Context {
                     Some(Err(gid)) => {
                         report(
                             ctx,
-                            Message::error("The following name is not assignable!", Some(e.loc)),
+                            Message::error("The following name is not assignable!", Some(istr.loc)),
                             // TODO: point to the name instead of the whole item
                             &[Message::note(
                                 &format!(
                                     "'{}' refers to a global item!",
-                                    ctx.uir_items[*gid].name.0
+                                    ctx.uir_items[*gid].name.name.0
                                 ),
-                                Some(ctx.uir_items[*gid].loc),
+                                Some(ctx.uir_items[*gid].name.loc),
                             )],
                         );
                         self.expressions(locals, ctx, expr);

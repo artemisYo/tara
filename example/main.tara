@@ -22,7 +22,7 @@ func main(): int {
     let () = 5;
     // let out = 5;
     // out = 5;
-    // fib = 5;
+    fib = 5;
     // fuck = fuck;
     return fib(5);
 }
