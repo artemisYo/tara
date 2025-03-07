@@ -44,7 +44,7 @@ fn preimport(ctx: &mut Tara, i: In) -> Out {
     for (loc, path) in prescan.imports.as_ref() {
         if path.len() < 2 {
             report(
-                ctx,
+                &ctx.modules,
                 Message::note(
                     "This import does nothing!",
                     Some(loc.meet(&path.first().map_or(*loc, |t| t.0))),

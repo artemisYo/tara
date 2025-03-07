@@ -3,14 +3,17 @@ pub mod preimport;
 pub mod prescan;
 pub mod typer;
 pub mod uir;
+pub mod fill;
 
 use crate::{ansi::Style, misc::{Ivec, Indexer}, report_simple, MkIndexer, Provenance};
-use std::{collections::BTreeMap as Map, path::PathBuf};
+use std::{collections::{BTreeMap as Map, BTreeSet as Set}, path::PathBuf};
 
 pub struct Tara {
     pub entry: ModuleId,
-    modules: Ivec<ModuleId, Module>,
-    uir_items: Ivec<uir::Id, uir::Function>,
+    pub modules: Ivec<ModuleId, Module>,
+    pub uir_items: Ivec<uir::Id, uir::Function>,
+    pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
+    fills: Set<fill::In>,
     typecheck: Map<typer::In, Option<typer::Out>>,
     resolution: Map<uir::In, Option<uir::Out>>,
     parses: Map<parse::In, Option<parse::Out>>,
@@ -36,7 +39,9 @@ impl Tara {
         Self {
             modules,
             entry,
+            fills: Default::default(),
             uir_items: Default::default(),
+            uir_types: Default::default(),
             typecheck: Default::default(),
             resolution: Default::default(),
             parses: Default::default(),

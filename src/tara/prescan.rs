@@ -221,5 +221,5 @@ fn unexpected_token<S: AsRef<str>>(ctx: &Tara, loc: Provenance, sp: S, exps: &[T
         _ = write!(title, "but got '{}'!", sp.as_ref());
         title
     };
-    report(ctx, Message::error(&title, Some(loc)), &[]);
+    report(&ctx.modules, Message::error(&title, Some(loc)), &[]);
 }

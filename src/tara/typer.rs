@@ -1,9 +1,10 @@
+use std::collections::BTreeMap as Map;
 use std::rc::Rc;
 
-use crate::{report, Message};
+use crate::{misc::Ivec, report, Message};
 
 use super::{
-    uir::{self, Expr, Function, Type, Typekind},
+    uir::{self, ExprId, Type, TypeId, Typekind},
     Tara,
 };
 
@@ -14,7 +15,7 @@ pub struct In {
 
 #[derive(Clone)]
 pub struct Out {
-    pub substitutions: Rc<[(usize, Type)]>,
+    pub substitutions: Rc<Map<usize, TypeId>>,
 }
 
 impl Tara {
@@ -24,7 +25,7 @@ impl Tara {
             Some(None) => panic!("typeck entered a cycle!"),
             None => {
                 self.typecheck.insert(i, None);
-                let data = Context::default().typeck(self, i);
+                let data = typeck(self, i);
                 self.typecheck.insert(i, Some(data));
                 self.typecheck.get(&i).cloned().unwrap().unwrap()
             }
@@ -36,8 +37,11 @@ pub enum Constraint {
     Unify(Type, Type),
 }
 
-#[derive(Default)]
-struct Context {
+struct Context<'a> {
+    items: &'a mut Ivec<uir::Id, uir::Function>,
+    typevec: &'a mut Ivec<uir::TypeId, uir::Typekind>,
+    modules: &'a Ivec<super::ModuleId, super::Module>,
+    func: uir::Id,
     constraints: Vec<Constraint>,
 }
 
@@ -46,233 +50,253 @@ enum ControlFlow {
     Break(Type),
 }
 
-impl Context {
-    fn typeck(mut self, ctx: &mut Tara, i: In) -> Out {
-        let f = &ctx.uir_items[i.i];
-        let body = match self.expressions(ctx, f, &f.locals[f.body]) {
-            Ok(t) => t,
-            Err(ControlFlow::Return(t)) => t,
-            Err(ControlFlow::Break(t)) => t,
-        };
-        self.constraints.push(Constraint::Unify(
-            f.typ.return_type().unwrap().clone(),
-            body,
-        ));
-        let substitutions = solve_constraints(ctx, self.constraints);
-        Out {
-            substitutions: substitutions.into(),
-        }
+fn typeck(tara: &mut Tara, i: In) -> Out {
+    let mut ctx = Context {
+        constraints: Vec::new(),
+        func: i.i,
+        items: &mut tara.uir_items,
+        typevec: &mut tara.uir_types,
+        modules: &mut tara.modules,
+    };
+    let body = ctx.items[i.i].body;
+    let body = match ctx.expressions(body) {
+        Ok(t) => t,
+        Err(ControlFlow::Return(t)) => t,
+        Err(ControlFlow::Break(t)) => t,
+    };
+    let item = &mut ctx.items[ctx.func];
+    ctx.constraints.push(Constraint::Unify(
+        item.typ.ret(&mut ctx.typevec).unwrap().clone(),
+        body,
+    ));
+    let substitutions = solve_constraints(ctx.typevec, ctx.modules, ctx.constraints);
+    Out {
+        substitutions: Rc::new(substitutions),
+    }
+}
+
+impl Context<'_> {
+    fn add_constraint(&mut self, Constraint::Unify(a, b): Constraint) {
+        self.constraints.push(Constraint::Unify(a, b));
+    }
+    fn item(&mut self) -> &mut uir::Function {
+        &mut self.items[self.func]
+    }
+    fn locals(&mut self) -> &mut uir::LocalVec {
+        &mut self.items[self.func].locals
     }
 
-    fn expressions(&mut self, ctx: &Tara, f: &Function, e: &Expr) -> Result<Type, ControlFlow> {
-        let typ = match e.kind {
-            uir::Exprkind::Poison => e.typ.clone(),
+    fn expressions(&mut self, e: ExprId) -> Result<Type, ControlFlow> {
+        let loc = self.locals()[e].loc;
+        let old_type = self.locals()[e].typ.clone();
+        let typ = match self.locals()[e].kind.clone() {
+            uir::Exprkind::Poison => self.locals()[e].typ.clone(),
             uir::Exprkind::If { cond, smash, pass } => {
-                let cond_t = self.expressions(ctx, f, &f.locals[cond])?;
-                self.constraints.push(Constraint::Unify(
-                    cond_t,
-                    Type {
-                        loc: f.locals[cond].loc,
-                        kind: Typekind::Bool,
-                    },
-                ));
-                let smash = match self.expressions(ctx, f, &f.locals[smash]) {
+                let cond_t = self.expressions(cond)?;
+                let cond_loc = self.locals()[cond].loc;
+                let bool_t = Type::simple(self.typevec, Typekind::Bool, cond_loc);
+                self.add_constraint(Constraint::Unify(cond_t, bool_t));
+                let smash = match self.expressions(smash) {
                     Ok(t) => t,
-                    Err(_) => e.typ.clone(),
+                    Err(_) => self.locals()[e].typ.clone(),
                 };
-                let pass = match self.expressions(ctx, f, &f.locals[pass]) {
+                let pass = match self.expressions(pass) {
                     Ok(t) => t,
-                    Err(_) => e.typ.clone(),
+                    Err(_) => self.locals()[e].typ.clone(),
                 };
-                self.constraints
-                    .push(Constraint::Unify(smash.clone(), pass));
+                self.add_constraint(Constraint::Unify(smash.clone(), pass));
                 smash
             }
             uir::Exprkind::Call { func, args } => {
-                let func = self.expressions(ctx, f, &f.locals[func])?;
-                let args = self.expressions(ctx, f, &f.locals[args])?;
-                let ret = &e.typ;
-                let unapp = Type {
-                    loc: e.loc,
-                    kind: Typekind::Func {
-                        args: Box::new(args),
-                        ret: Box::new(ret.clone()),
-                    },
-                };
-                self.constraints.push(Constraint::Unify(func, unapp));
-                ret.clone()
+                let func = self.expressions(func)?;
+                let args = self.expressions(args)?;
+                let ret = old_type.clone();
+                let unapp = Type::func(self.typevec, &args, &ret, loc);
+                self.add_constraint(Constraint::Unify(func, unapp));
+                ret
             }
-            uir::Exprkind::Tuple(ref expr_ids) => {
+            uir::Exprkind::Tuple(expr_ids) => {
                 let mut fields = Vec::new();
                 for e in expr_ids.iter() {
-                    fields.push(self.expressions(ctx, f, &f.locals[*e])?);
+                    fields.push(self.expressions(*e)?);
                 }
-                Type::tup(fields, e.loc)
+                Type::tup(self.typevec, &fields, loc)
             }
             uir::Exprkind::Loop(id) => {
                 // explicitly catch breaks
-                if let Err(ControlFlow::Return(t)) = self.expressions(ctx, f, &f.locals[id]) {
+                if let Err(ControlFlow::Return(t)) = self.expressions(id) {
                     return Err(ControlFlow::Return(t));
                 }
-                e.typ.clone()
+                self.locals()[e].typ.clone()
             }
-            uir::Exprkind::Bareblock(ref expr_ids) => {
-                let mut t = Type::unit(e.loc);
+            uir::Exprkind::Bareblock(expr_ids) => {
+                let mut t = Type::unit(self.typevec, loc);
                 for e in expr_ids.iter() {
-                    t = self.expressions(ctx, f, &f.locals[*e])?;
+                    t = self.expressions(*e)?;
                 }
                 t
             }
-            uir::Exprkind::Recall(Ok(binding_id)) => f.locals[binding_id].typ.clone(),
-            uir::Exprkind::Recall(Err(item_id)) => ctx.uir_items[item_id].typ.clone(),
-            uir::Exprkind::Number(_) => Type {
-                loc: e.loc,
-                kind: Typekind::Int,
-            },
-            uir::Exprkind::String(_) => Type {
-                loc: e.loc,
-                kind: Typekind::String,
-            },
-            uir::Exprkind::Bool(_) => Type {
-                loc: e.loc,
-                kind: Typekind::Bool,
-            },
-            uir::Exprkind::Arguments => e.typ.clone(),
+            uir::Exprkind::Recall(Ok(binding_id)) => self.locals()[binding_id].typ.clone(),
+            uir::Exprkind::Recall(Err(item_id)) => self.items[item_id].typ.clone(),
+            uir::Exprkind::Number(_) => Type::simple(self.typevec, Typekind::Int, loc),
+            uir::Exprkind::String(_) => Type::simple(self.typevec, Typekind::String, loc),
+            uir::Exprkind::Bool(_) => Type::simple(self.typevec, Typekind::Bool, loc),
+            uir::Exprkind::Arguments => self.locals()[e].typ.clone(),
             uir::Exprkind::Let(binding_id, expr_id) => {
-                let bind = f.locals[binding_id].typ.clone();
-                let expr = self.expressions(ctx, f, &f.locals[expr_id])?;
-                self.constraints.push(Constraint::Unify(bind, expr));
-                Type::unit(e.loc)
+                let bind = self.locals()[binding_id].typ.clone();
+                let expr = self.expressions(expr_id)?;
+                self.add_constraint(Constraint::Unify(bind, expr));
+                Type::unit(self.typevec, loc)
             }
             uir::Exprkind::Assign(binding_id, expr_id) => {
-                if let uir::Bindkind::Name(n, false) = f.locals[binding_id].kind {
+                if let uir::Bindkind::Name(n, false) = self.locals()[binding_id].kind {
+                    let decl_loc = self.locals()[binding_id].loc;
                     report(
-                        ctx,
-                        Message::error("Cannot reassign an immutable variable!", Some(e.loc)),
+                        self.modules,
+                        Message::error("Cannot reassign an immutable variable!", Some(loc)),
                         &[Message::note(
                             &format!("'{}' is declared here!", n.0),
-                            Some(f.locals[binding_id].loc),
+                            Some(decl_loc),
                         )],
                     );
                 }
-                let bind = f.locals[binding_id].typ.clone();
-                let expr = self.expressions(ctx, f, &f.locals[expr_id])?;
-                self.constraints.push(Constraint::Unify(bind, expr));
-                Type::unit(e.loc)
+                let bind = self.locals()[binding_id].typ.clone();
+                let expr = self.expressions(expr_id)?;
+                self.add_constraint(Constraint::Unify(bind, expr));
+                Type::unit(self.typevec, loc)
             }
             uir::Exprkind::Break { val, target } => {
-                let val = self.expressions(ctx, f, &f.locals[val])?;
-                let target = f.locals[target].typ.clone();
-                self.constraints.push(Constraint::Unify(val.clone(), target));
+                let val = self.expressions(val)?;
+                let target = self.locals()[target].typ.clone();
+                self.add_constraint(Constraint::Unify(val.clone(), target));
                 return Err(ControlFlow::Break(val));
             }
             uir::Exprkind::Return(expr_id) => {
-                let val = self.expressions(ctx, f, &f.locals[expr_id])?;
-                let target = f.typ.return_type().unwrap().clone();
-                self.constraints.push(Constraint::Unify(val.clone(), target));
+                let val = self.expressions(expr_id)?;
+                let target = self.item().typ.clone().ret(self.typevec).unwrap().clone();
+                self.add_constraint(Constraint::Unify(val.clone(), target));
                 return Err(ControlFlow::Return(val));
             }
             uir::Exprkind::Const(expr_id) => {
-                self.expressions(ctx, f, &f.locals[expr_id])?;
-                Type::unit(e.loc)
+                self.expressions(expr_id)?;
+                Type::unit(self.typevec, loc)
             }
         };
         // probably not always needed but included for sanity
-        self.constraints
-            .push(Constraint::Unify(typ.clone(), e.typ.clone()));
+        self.add_constraint(Constraint::Unify(typ.clone(), old_type));
         Ok(typ)
     }
 }
 
-fn solve_constraints(ctx: &Tara, mut cs: Vec<Constraint>) -> Vec<(usize, Type)> {
-    let mut out = Vec::new();
-    while let Some(c) = cs.pop() {
-        match c {
-            Constraint::Unify(a, b) if a == b => {}
-            Constraint::Unify(
-                Type {
-                    kind: Typekind::Var(a),
-                    ..
-                },
-                b,
-            ) => {
-                out.push((a, b));
-                substitute(&mut cs, out.last().unwrap());
+fn solve_constraints(
+    typevec: &mut Ivec<uir::TypeId, Typekind>,
+    modules: &Ivec<super::ModuleId, super::Module>,
+    mut cs: Vec<Constraint>,
+) -> Map<usize, TypeId> {
+    let mut out = Map::new();
+    while let Some(Constraint::Unify(a, b)) = cs.pop() {
+        match (&typevec[a.kind], &typevec[b.kind]) {
+            (Typekind::Var(a), _) => {
+                out.insert(*a, b.kind);
+                substitute(&mut cs, typevec, &out);
             }
-            Constraint::Unify(
-                a,
-                Type {
-                    kind: Typekind::Var(b),
-                    ..
-                },
-            ) => {
-                out.push((b, a));
-                substitute(&mut cs, out.last().unwrap());
+            (_, Typekind::Var(b)) => {
+                out.insert(*b, a.kind);
+                substitute(&mut cs, typevec, &out);
             }
-            Constraint::Unify(
-                Type {
-                    kind: Typekind::Bundle(v),
-                    ..
-                },
-                Type {
-                    kind: Typekind::Bundle(w),
-                    ..
-                },
-            ) => {
-                for (a, b) in v.into_iter().zip(w.into_iter()) {
-                    cs.push(Constraint::Unify(a, b))
+            (Typekind::Bundle(ks_a), Typekind::Bundle(ks_b)) => {
+                for (&k_a, &k_b) in ks_a.clone().iter().zip(ks_b.clone().iter()) {
+                    cs.push(Constraint::Unify(
+                        Type {
+                            kind: k_a,
+                            loc: a.loc,
+                        },
+                        Type {
+                            kind: k_b,
+                            loc: b.loc,
+                        },
+                    ));
                 }
             }
-            Constraint::Unify(
-                Type {
-                    kind: Typekind::Call { args: a1, func: f1 },
-                    ..
-                },
-                Type {
-                    kind: Typekind::Call { args: a2, func: f2 },
-                    ..
-                },
-            ) => {
-                cs.push(Constraint::Unify(*a1, *a2));
-                cs.push(Constraint::Unify(*f1, *f2));
+            (Typekind::Call { args: a1, func: f1 }, Typekind::Call { args: a2, func: f2 }) => {
+                cs.push(Constraint::Unify(
+                    Type {
+                        kind: *f1,
+                        loc: a.loc,
+                    },
+                    Type {
+                        kind: *f2,
+                        loc: b.loc,
+                    },
+                ));
+                cs.push(Constraint::Unify(
+                    Type {
+                        kind: *a1,
+                        loc: a.loc,
+                    },
+                    Type {
+                        kind: *a2,
+                        loc: b.loc,
+                    },
+                ));
             }
-            Constraint::Unify(
-                Type {
-                    kind: Typekind::Func { args: a1, ret: r1 },
-                    ..
-                },
-                Type {
-                    kind: Typekind::Func { args: a2, ret: r2 },
-                    ..
-                },
-            ) => {
-                cs.push(Constraint::Unify(*a1, *a2));
-                cs.push(Constraint::Unify(*r1, *r2));
+            (Typekind::Func { args: a1, ret: r1 }, Typekind::Func { args: a2, ret: r2 }) => {
+                cs.push(Constraint::Unify(
+                    Type {
+                        kind: *a1,
+                        loc: a.loc,
+                    },
+                    Type {
+                        kind: *a2,
+                        loc: b.loc,
+                    },
+                ));
+                cs.push(Constraint::Unify(
+                    Type {
+                        kind: *r1,
+                        loc: a.loc,
+                    },
+                    Type {
+                        kind: *r2,
+                        loc: b.loc,
+                    },
+                ));
             }
-            Constraint::Unify(a, b) if a != b => {
+            (a_k, b_k) if a_k == b_k => {}
+            (a_k, b_k) if a_k != b_k => {
                 report(
-                    ctx,
+                    modules,
                     Message::error("Could not unify types!", None),
                     &[
-                        Message::note(&format!("Type '{}' originates here:", a), Some(a.loc)),
-                        Message::note(&format!("Type '{}' originates here:", b), Some(b.loc)),
+                        Message::note(
+                            &format!("Type '{}' originates here:", a.fmt(typevec)),
+                            Some(a.loc)
+                        ),
+                        Message::note(
+                            &format!("Type '{}' originates here:", b.fmt(typevec)),
+                            Some(b.loc)
+                        ),
                     ],
                 );
                 // TODO: poisoning or smt
                 std::process::exit(1);
             }
-            Constraint::Unify(a, b) => unreachable!("huh?\na: {a:#?}\nb: {b:#?}"),
+            _ => unreachable!(),
         }
     }
     out
 }
 
-fn substitute(cs: &mut [Constraint], (t, by): &(usize, Type)) {
+fn substitute(
+    cs: &mut [Constraint],
+    typevec: &mut Ivec<uir::TypeId, Typekind>,
+    map: &Map<usize, TypeId>,
+) {
     for c in cs.iter_mut() {
         match c {
             Constraint::Unify(a, b) => {
-                a.replace(*t, by);
-                b.replace(*t, by);
+                a.kind.replace(typevec, map);
+                b.kind.replace(typevec, map);
             }
         }
     }

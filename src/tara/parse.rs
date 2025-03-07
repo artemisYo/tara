@@ -863,6 +863,6 @@ impl Parser<'_> {
             }
         };
         let loc = t.map_or(self.ctx.eof_loc(self.m), |t| t.loc);
-        report(self.ctx, Message::error(&title, Some(loc)), notes);
+        report(&self.ctx.modules, Message::error(&title, Some(loc)), notes);
     }
 }

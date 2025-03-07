@@ -16,6 +16,13 @@ impl<K: Eq, V> Svec<K, V> {
     pub fn find_mut(&mut self, k: &K) -> Option<&mut V> {
         self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &mut self.vals[i])
     }
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+    pub fn truncate(&mut self, l: usize) {
+        self.keys.truncate(l);
+        self.vals.truncate(l);
+    }
 }
 impl<K, V> Default for Svec<K, V> {
     fn default() -> Self {
