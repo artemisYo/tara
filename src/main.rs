@@ -3,6 +3,9 @@ mod lexer;
 mod misc;
 mod tara;
 mod tokens;
+use inkwell::{
+    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine}, OptimizationLevel,
+};
 use misc::Ivec;
 pub use tara::*;
 
@@ -75,17 +78,13 @@ impl Provenance {
         };
         let source = &ctx[span_module];
         let src = source.get_source();
-        let Some(start) = src.get(..span_start) else {
-            return None;
-        };
+        let start = src.get(..span_start)?;
         let start = start
             .rmatch_indices("\n")
             .nth(surround)
             .map(|(n, _)| n + 1)
             .unwrap_or(0);
-        let Some(end) = src.get(span_end..) else {
-            return None;
-        };
+        let end = src.get(span_end..)?;
         let end = end
             .match_indices("\n")
             .nth(surround)
@@ -256,27 +255,29 @@ fn main() {
             .as_ref(),
     );
 
-    let parse = ctx.parse(parse::In { m: ctx.entry });
-    for f in &parse.ast.funcs {
-        if f.name.name.0 == "main" {
-            println!("{:#?}", f);
-        }
-    }
+    // let parse = ctx.parse(parse::In { m: ctx.entry });
+    // for f in &parse.ast.funcs {
+    //     if f.name.name.0 == "main" {
+    //         println!("{:#?}", f);
+    //     }
+    // }
 
     let resolution = ctx.resolve(uir::In { m: ctx.entry });
     let mut main_id = None;
+    let mut _start = None;
     for i in resolution.items.iter() {
         let uir = ctx.get_uir(*i);
-        if uir.name.name.0 != "main" {
-            continue;
+        if uir.name.name.0 == "_start" {
+            _start = Some(*i);
         }
-        main_id = Some(*i);
-        break;
+        if uir.name.name.0 == "main" {
+            main_id = Some(*i);
+        }
     }
 
     {
         let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}", main_fmt);
+        println!("{}\n", main_fmt);
     }
 
     let subst = ctx.typeck(typer::In {
@@ -288,7 +289,7 @@ fn main() {
 
     {
         let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}", main_fmt);
+        println!("{}\n", main_fmt);
     }
 
     ctx.fill(fill::In {
@@ -297,11 +298,49 @@ fn main() {
 
     {
         let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}", main_fmt);
+        println!("{}\n", main_fmt);
     }
 
     for &i in resolution.items.iter() {
-        let subst = ctx.typeck(typer::In { i });
-        // ctx.fill(fill::In { i });
+        ctx.fill(fill::In { i });
     }
+
+    // ctx.codegen(codegen::In { i: main_id.unwrap() });
+    ctx.codegen(codegen::In { i: _start.unwrap() });
+    ctx.llvm_mod.print_to_stderr();
+    match ctx.llvm_mod.verify() {
+        Ok(()) => {}
+        Err(msg) => {
+            println!("{}", msg.to_str().unwrap());
+            std::process::exit(1);
+        }
+    }
+
+    // Emit
+    Target::initialize_native(&InitializationConfig {
+        asm_parser: true,
+        asm_printer: true,
+        base: true,
+        disassembler: false,
+        info: false,
+        machine_code: true,
+    })
+    .unwrap();
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).unwrap();
+    let cpu = TargetMachine::get_host_cpu_name();
+    let features = TargetMachine::get_host_cpu_features();
+    let machine = target
+        .create_target_machine(
+            &triple,
+            cpu.to_str().unwrap(),
+            features.to_str().unwrap(),
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .unwrap();
+    machine
+        .write_to_file(&ctx.llvm_mod, FileType::Object, "./out.o".as_ref())
+        .unwrap();
 }

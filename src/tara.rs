@@ -1,18 +1,28 @@
+pub mod codegen;
+pub mod fill;
 pub mod parse;
 pub mod preimport;
 pub mod prescan;
 pub mod typer;
 pub mod uir;
-pub mod fill;
 
-use crate::{ansi::Style, misc::{Ivec, Indexer}, report_simple, MkIndexer, Provenance};
-use std::{collections::{BTreeMap as Map, BTreeSet as Set}, path::PathBuf};
+use crate::{
+    ansi::Style,
+    misc::{Indexer, Ivec},
+    report_simple, MkIndexer, Provenance,
+};
+use std::{
+    collections::{BTreeMap as Map, BTreeSet as Set},
+    path::PathBuf,
+};
 
 pub struct Tara {
     pub entry: ModuleId,
     pub modules: Ivec<ModuleId, Module>,
     pub uir_items: Ivec<uir::Id, uir::Function>,
     pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
+    pub llvm_mod: inkwell::module::Module<'static>,
+    codegen: Map<codegen::In, Option<codegen::Out>>,
     fills: Set<fill::In>,
     typecheck: Map<typer::In, Option<typer::Out>>,
     resolution: Map<uir::In, Option<uir::Out>>,
@@ -31,14 +41,18 @@ impl Tara {
             report_simple(
                 Style::red().apply("Error"),
                 &format!("Could not read file '{}'!", main),
-                None
+                None,
             );
             std::process::exit(1);
         };
         let entry = modules.push(entry);
+        let llvm_ctx = Box::leak(Box::new(inkwell::context::Context::create()));
+        let llvm_mod = llvm_ctx.create_module("main");
         Self {
             modules,
             entry,
+            llvm_mod,
+            codegen: Default::default(),
             fills: Default::default(),
             uir_items: Default::default(),
             uir_types: Default::default(),
@@ -144,7 +158,7 @@ impl Module {
                 report_simple(
                     Style::red().apply("Error"),
                     &format!("An error occurred while trying to read file {:?}!", &path),
-                    Some(&format!("Error descriptor: {}", e))
+                    Some(&format!("Error descriptor: {}", e)),
                 );
                 std::process::exit(1);
             }

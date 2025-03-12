@@ -66,7 +66,7 @@ fn typeck(tara: &mut Tara, i: In) -> Out {
     };
     let item = &mut ctx.items[ctx.func];
     ctx.constraints.push(Constraint::Unify(
-        item.typ.ret(&mut ctx.typevec).unwrap().clone(),
+        item.typ.ret(ctx.typevec).unwrap().clone(),
         body,
     ));
     let substitutions = solve_constraints(ctx.typevec, ctx.modules, ctx.constraints);

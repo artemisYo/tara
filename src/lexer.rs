@@ -87,17 +87,24 @@ impl<'src> Lexer<'src> {
         })
     }
 
-    fn with_table(&mut self, t: &[(&[u8], Tokenkind)]) -> Option<Token<&'src str>> {
+    fn with_table(
+        &mut self,
+        t: &[(&[u8], Tokenkind)],
+        p: impl Fn(&[u8]) -> bool,
+    ) -> Option<Token<&'src str>> {
         let text = self.cursor();
         let start = self.offset;
         for (s, k) in t {
             if !text.starts_with(s) {
                 continue;
             }
+            if !p(&text[s.len()..]) {
+                continue;
+            }
             self.offset += s.len();
             return Some(Token {
                 loc: Provenance::Span {
-                module: self.module,
+                    module: self.module,
                     start,
                     end: self.offset,
                 },
@@ -109,7 +116,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn immediates(&mut self) -> Option<Token<&'src str>> {
-        self.with_table(Self::IMMS)
+        self.with_table(Self::IMMS, |_| true)
     }
 
     fn keywords(&mut self) -> Option<Token<&'src str>> {
@@ -130,13 +137,13 @@ impl<'src> Lexer<'src> {
             Lexer::mk_tk(Import),
             Lexer::mk_tk(Underscore),
         ];
-        self.with_table(TABLE)
+        self.with_table(TABLE, |s| s.first().map_or(true, |&c| is_word_break(c)))
     }
 
     fn bools(&mut self) -> Option<Token<&'src str>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[(b"true", Bool), (b"false", Bool)];
-        self.with_table(TABLE)
+        self.with_table(TABLE, |s| s.first().map_or(true, |&c| is_word_break(c)))
     }
 
     fn string(&mut self) -> Option<Token<&'src str>> {

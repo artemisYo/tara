@@ -58,9 +58,8 @@ impl TypeId {
                     k.replace(types, map);
                 }
             }
-            Typekind::Var(v) => match map.get(&v) {
-                Some(t) => types[*self] = types[*t].clone(),
-                None => {}
+            Typekind::Var(v) => if let Some(t) = map.get(&v) {
+                types[*self] = types[*t].clone()
             },
             _ => {}
         }
@@ -370,13 +369,13 @@ impl std::fmt::Display for ExprFmt<'_> {
                 write!(f, "(loop {} ∈ {})", body, typ)
             }
             Exprkind::Bareblock(ref expr_ids) => {
-                write!(f, "({{\n")?;
+                writeln!(f, "({{")?;
                 for &e in expr_ids.as_ref() {
                     for _ in 0..self.nesting + 1 {
                         write!(f, "  ")?;
                     }
                     let e = self.sub(e);
-                    write!(f, "{}\n", e)?;
+                    writeln!(f, "{}", e)?;
                 }
                 for _ in 0..self.nesting {
                     write!(f, "  ")?;
@@ -587,7 +586,7 @@ impl Context<'_> {
             let item = &mut self.items[self.func];
             Expr {
                 loc: f.args.loc(),
-                typ: item.typ.argument(&mut self.typevec).unwrap(),
+                typ: item.typ.argument(self.typevec).unwrap(),
                 kind: Exprkind::Arguments,
             }
         };
@@ -634,7 +633,7 @@ impl Context<'_> {
                     })
                     .unzip();
                 (
-                    Type::tup(&mut self.typevec, &types, e.loc),
+                    Type::tup(self.typevec, &types, e.loc),
                     Exprkind::Tuple(exprs.into()),
                 )
             }
@@ -642,7 +641,7 @@ impl Context<'_> {
                 // 'reserve' a local slot
                 let slot = Expr {
                     loc: e.loc,
-                    typ: Type::unit(&mut self.typevec, e.loc),
+                    typ: Type::unit(self.typevec, e.loc),
                     kind: Exprkind::default(),
                 };
                 let slot = self.item().locals.push_expr(slot);
@@ -684,15 +683,15 @@ impl Context<'_> {
                 }
             },
             parse::Exprkind::Number(istr) => (
-                Type::simple(&mut self.typevec, Typekind::Int, e.loc),
+                Type::simple(self.typevec, Typekind::Int, e.loc),
                 Exprkind::Number(istr),
             ),
             parse::Exprkind::String(istr) => (
-                Type::simple(&mut self.typevec, Typekind::String, e.loc),
+                Type::simple(self.typevec, Typekind::String, e.loc),
                 Exprkind::String(istr),
             ),
             parse::Exprkind::Bool(istr) => (
-                Type::simple(&mut self.typevec, Typekind::Bool, e.loc),
+                Type::simple(self.typevec, Typekind::Bool, e.loc),
                 Exprkind::Bool(istr),
             ),
             parse::Exprkind::Let(ref binding, ref expr) => {
@@ -718,7 +717,7 @@ impl Context<'_> {
                         let bid = *bid;
                         let expr = self.expressions(expr);
                         (
-                            Type::unit(&mut self.typevec, e.loc),
+                            Type::unit(self.typevec, e.loc),
                             Exprkind::Assign(bid, expr),
                         )
                     }
@@ -736,7 +735,7 @@ impl Context<'_> {
                             )],
                         );
                         self.expressions(expr);
-                        (Type::unit(&mut self.typevec, e.loc), Exprkind::Poison)
+                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
                     }
                     None => {
                         report(
@@ -745,7 +744,7 @@ impl Context<'_> {
                             &[],
                         );
                         self.expressions(expr);
-                        (Type::unit(&mut self.typevec, e.loc), Exprkind::Poison)
+                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
                     }
                 }
             }
@@ -756,13 +755,13 @@ impl Context<'_> {
                     } else {
                         let val = Expr {
                             loc: e.loc,
-                            typ: Type::unit(&mut self.typevec, e.loc),
+                            typ: Type::unit(self.typevec, e.loc),
                             kind: Exprkind::default(),
                         };
                         self.item().locals.push_expr(val)
                     };
                     (
-                        Type::unit(&mut self.typevec, e.loc),
+                        Type::unit(self.typevec, e.loc),
                         Exprkind::Break { val, target },
                     )
                 }
@@ -772,24 +771,24 @@ impl Context<'_> {
                         Message::error("This break is not contained by any loops!", Some(e.loc)),
                         &[],
                     );
-                    (Type::unit(&mut self.typevec, e.loc), Exprkind::Poison)
+                    (Type::unit(self.typevec, e.loc), Exprkind::Poison)
                 }
             },
             parse::Exprkind::Return(None) => {
                 let expr = Expr {
                     loc: e.loc,
-                    typ: Type::unit(&mut self.typevec, e.loc),
+                    typ: Type::unit(self.typevec, e.loc),
                     kind: Exprkind::default(),
                 };
                 let expr = self.item().locals.push_expr(expr);
-                (Type::unit(&mut self.typevec, e.loc), Exprkind::Return(expr))
+                (Type::unit(self.typevec, e.loc), Exprkind::Return(expr))
             }
             parse::Exprkind::Return(Some(ref expr)) => (
-                Type::unit(&mut self.typevec, e.loc),
+                Type::unit(self.typevec, e.loc),
                 Exprkind::Return(self.expressions(expr)),
             ),
             parse::Exprkind::Const(ref expr) => (
-                Type::unit(&mut self.typevec, e.loc),
+                Type::unit(self.typevec, e.loc),
                 Exprkind::Const(self.expressions(expr)),
             ),
         };
@@ -838,7 +837,7 @@ impl Context<'_> {
                     None,
                     Binding {
                         kind: Bindkind::Tuple(bs.into()),
-                        typ: Type::tup(&mut self.typevec, &ts, *loc),
+                        typ: Type::tup(self.typevec, &ts, *loc),
                         loc: *loc,
                     },
                 )
@@ -852,7 +851,7 @@ impl Context<'_> {
     }
 
     fn types(&mut self, t: &parse::Type) -> Type {
-        types(&mut self.typevec, t)
+        types(self.typevec, t)
     }
 }
 

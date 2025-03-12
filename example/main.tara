@@ -1,4 +1,6 @@
 
+import main/foo/...;
+
 func <(a: int, b: int): bool = true;
 func -(a: int, b: int): int = 1;
 func +(a: int, b: int): int = 1;
@@ -19,15 +21,18 @@ func main(): int {
     ;
     let another!string = "this is a string";
     operator(3, &&, 4);
-    let () = 5;
+    let () = fib(5);
     // let out = 5;
     // out = 5;
-    fib = 5;
     // fuck = fuck;
+    // return fib(5);
     return fib(5);
 }
 
-// this is a comment
-operator(_, !, 5);
+func _start() {
+    let code = main();
+}
 
-import bar/; import main/foo/...;
+// this is a comment
+// operator(_, !, 5);
+
