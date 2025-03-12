@@ -5,9 +5,10 @@ func <(a: int, b: int): bool = true;
 func -(a: int, b: int): int = 1;
 func +(a: int, b: int): int = 1;
 
-func fib(n: int): int {
-    if n < 2 { return n; };
-    fib(n - 2) + fib(n - 1)
+func fib(n: int): int = if n < 2 {
+    return n;
+} else {
+    return fib(n - 2) + fib(n - 1);
 }
 
 func test() {}

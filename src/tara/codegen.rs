@@ -227,7 +227,9 @@ impl Context<'_> {
                     cont = true;
                 }
 
+                self.builder.position_at_end(post_b);
                 if !cont {
+                    self.builder.build_unreachable().unwrap();
                     if Control::Break == smash_v {
                         return Control::Break;
                     }
@@ -261,7 +263,6 @@ impl Context<'_> {
                     &[(&p.0, p.1), (&q.0, q.1)]
                 };
 
-                self.builder.position_at_end(post_b);
                 let phi_v = self
                     .builder
                     .build_phi(p.0.get_type(), "merge_branches")

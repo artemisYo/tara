@@ -45,9 +45,10 @@ struct Context<'a> {
     constraints: Vec<Constraint>,
 }
 
+#[derive(PartialEq, Eq)]
 enum ControlFlow {
-    Return(Type),
-    Break(Type),
+    Return,
+    Break,
 }
 
 fn typeck(tara: &mut Tara, i: In) -> Out {
@@ -59,16 +60,13 @@ fn typeck(tara: &mut Tara, i: In) -> Out {
         modules: &mut tara.modules,
     };
     let body = ctx.items[i.i].body;
-    let body = match ctx.expressions(body) {
-        Ok(t) => t,
-        Err(ControlFlow::Return(t)) => t,
-        Err(ControlFlow::Break(t)) => t,
-    };
-    let item = &mut ctx.items[ctx.func];
-    ctx.constraints.push(Constraint::Unify(
-        item.typ.ret(ctx.typevec).unwrap().clone(),
-        body,
-    ));
+    if let Ok(t) = ctx.expressions(body) {
+        let item = &mut ctx.items[ctx.func];
+        ctx.constraints.push(Constraint::Unify(
+            item.typ.ret(ctx.typevec).unwrap().clone(),
+            t,
+        ));
+    }
     let substitutions = solve_constraints(ctx.typevec, ctx.modules, ctx.constraints);
     Out {
         substitutions: Rc::new(substitutions),
@@ -96,13 +94,15 @@ impl Context<'_> {
                 let cond_loc = self.locals()[cond].loc;
                 let bool_t = Type::simple(self.typevec, Typekind::Bool, cond_loc);
                 self.add_constraint(Constraint::Unify(cond_t, bool_t));
-                let smash = match self.expressions(smash) {
-                    Ok(t) => t,
-                    Err(_) => self.locals()[e].typ.clone(),
-                };
-                let pass = match self.expressions(pass) {
-                    Ok(t) => t,
-                    Err(_) => self.locals()[e].typ.clone(),
+                let smash = self.expressions(smash);
+                let pass = self.expressions(pass);
+                let (smash, pass) = match (smash, pass) {
+                    (Err(ControlFlow::Break), Err(_)) | (Err(_), Err(ControlFlow::Break)) => {
+                        return Err(ControlFlow::Break)
+                    }
+                    (Err(_), Err(_)) => return Err(ControlFlow::Return),
+                    (Err(_), Ok(k)) | (Ok(k), Err(_)) => (k, self.locals()[e].typ.clone()),
+                    (Ok(s), Ok(p)) => (s, p),
                 };
                 self.add_constraint(Constraint::Unify(smash.clone(), pass));
                 smash
@@ -124,8 +124,8 @@ impl Context<'_> {
             }
             uir::Exprkind::Loop(id) => {
                 // explicitly catch breaks
-                if let Err(ControlFlow::Return(t)) = self.expressions(id) {
-                    return Err(ControlFlow::Return(t));
+                if Err(ControlFlow::Return) == self.expressions(id) {
+                    return Err(ControlFlow::Return);
                 }
                 self.locals()[e].typ.clone()
             }
@@ -168,14 +168,14 @@ impl Context<'_> {
             uir::Exprkind::Break { val, target } => {
                 let val = self.expressions(val)?;
                 let target = self.locals()[target].typ.clone();
-                self.add_constraint(Constraint::Unify(val.clone(), target));
-                return Err(ControlFlow::Break(val));
+                self.add_constraint(Constraint::Unify(val, target));
+                return Err(ControlFlow::Break);
             }
             uir::Exprkind::Return(expr_id) => {
                 let val = self.expressions(expr_id)?;
                 let target = self.item().typ.clone().ret(self.typevec).unwrap().clone();
-                self.add_constraint(Constraint::Unify(val.clone(), target));
-                return Err(ControlFlow::Return(val));
+                self.add_constraint(Constraint::Unify(val, target));
+                return Err(ControlFlow::Return);
             }
             uir::Exprkind::Const(expr_id) => {
                 self.expressions(expr_id)?;
@@ -270,11 +270,11 @@ fn solve_constraints(
                     &[
                         Message::note(
                             &format!("Type '{}' originates here:", a.fmt(typevec)),
-                            Some(a.loc)
+                            Some(a.loc),
                         ),
                         Message::note(
                             &format!("Type '{}' originates here:", b.fmt(typevec)),
-                            Some(b.loc)
+                            Some(b.loc),
                         ),
                     ],
                 );
