@@ -13,9 +13,6 @@ impl<K: Eq, V> Svec<K, V> {
     pub fn find(&self, k: &K) -> Option<&V> {
         self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &self.vals[i])
     }
-    pub fn find_mut(&mut self, k: &K) -> Option<&mut V> {
-        self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &mut self.vals[i])
-    }
     pub fn len(&self) -> usize {
         self.keys.len()
     }

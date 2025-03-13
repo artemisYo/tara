@@ -46,19 +46,20 @@ impl Context<'_> {
             .typ
             .kind
             .replace(self.typevec, self.s.as_ref());
-        match &self.f.locals[b].kind {
+        match self.f.locals[b].kind {
             uir::Exprkind::If { cond, smash, pass } => {
-                let (cond, smash, pass) = (*cond, *smash, *pass);
                 self.expressions(cond);
                 self.expressions(smash);
                 self.expressions(pass);
             }
             uir::Exprkind::Call { func, args } => {
-                let (func, args) = (*func, *args);
                 self.expressions(func);
                 self.expressions(args);
             }
-            uir::Exprkind::Tuple(expr_ids) | uir::Exprkind::Bareblock(expr_ids) => {
+            uir::Exprkind::Builtin { args, .. } => {
+                self.expressions(args);
+            },
+            uir::Exprkind::Tuple(ref expr_ids) | uir::Exprkind::Bareblock(ref expr_ids) => {
                 for &e in expr_ids.clone().iter() {
                     self.expressions(e);
                 }
@@ -71,15 +72,13 @@ impl Context<'_> {
             | uir::Exprkind::Bool(_) => {}
             uir::Exprkind::Assign(binding_id, expr_id)
             | uir::Exprkind::Let(binding_id, expr_id) => {
-                let (binding, expr) = (*binding_id, *expr_id);
-                self.bindings(binding);
-                self.expressions(expr);
+                self.bindings(binding_id);
+                self.expressions(expr_id);
             }
             uir::Exprkind::Loop(val)
             | uir::Exprkind::Break { val, .. }
             | uir::Exprkind::Return(val)
             | uir::Exprkind::Const(val) => {
-                let val = *val;
                 self.expressions(val);
             }
         }

@@ -4,7 +4,7 @@ use inkwell::{
     context::ContextRef,
     types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StringRadix},
     values::{AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
-    AddressSpace,
+    AddressSpace, InlineAsmDialect, IntPredicate,
 };
 use std::collections::BTreeMap as Map;
 
@@ -286,6 +286,7 @@ impl Context<'_> {
                     .unwrap();
                 Control::Plain(res.as_any_value_enum())
             }
+            uir::Exprkind::Builtin { builtin, args, .. } => self.builtins(builtin, args),
             uir::Exprkind::Tuple(ref expr_ids) => {
                 let expr_ids = expr_ids.clone();
                 let ty = self.tara.uir_types[self.locals()[e].typ.kind].clone();
@@ -300,7 +301,10 @@ impl Context<'_> {
                         Control::Plain(v) => any_to_basic_value(v),
                         e => return e,
                     };
-                    comma = self.builder.build_insert_value(comma, v, ix as u32, "tuple").unwrap();
+                    comma = self
+                        .builder
+                        .build_insert_value(comma, v, ix as u32, "tuple")
+                        .unwrap();
                 }
                 Control::Plain(comma.as_any_value_enum())
             }
@@ -437,7 +441,7 @@ impl Context<'_> {
 
     fn bindings(&mut self, b: uir::BindingId, v: BasicValueEnum<'static>) {
         match self.locals()[b].kind {
-            uir::Bindkind::Empty => {},
+            uir::Bindkind::Empty => {}
             uir::Bindkind::Name(istr, _) => {
                 let ty = v.get_type();
                 let ptr = self.builder.build_alloca(ty, "let").unwrap();
@@ -458,5 +462,197 @@ impl Context<'_> {
                 }
             }
         }
+    }
+
+    fn builtins(&mut self, b: uir::Builtinkind, a: uir::ExprId) -> Control {
+        let mut args = Vec::with_capacity(7);
+        match self.locals()[a].kind {
+            uir::Exprkind::Tuple(ref fields) => {
+                for &f in fields.clone().iter() {
+                    let f = match self.expressions(f) {
+                        Control::Plain(v) => v,
+                        e => return e,
+                    };
+                    args.push(f);
+                }
+            }
+            _ => {
+                let a = match self.expressions(a) {
+                    Control::Plain(v) => v,
+                    e => return e,
+                };
+                args.push(a);
+            }
+        }
+
+        let name = b.spelling();
+        Control::Plain(match b {
+            uir::Builtinkind::Add => self
+                .builder
+                .build_int_add(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Sub => self
+                .builder
+                .build_int_sub(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Mul => self
+                .builder
+                .build_int_mul(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Div => self
+                .builder
+                .build_int_unsigned_div(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Mod => self
+                .builder
+                .build_int_unsigned_rem(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::And => self
+                .builder
+                .build_and(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Or => self
+                .builder
+                .build_or(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Xor => self
+                .builder
+                .build_xor(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::ShLeft => self
+                .builder
+                .build_left_shift(args[0].into_int_value(), args[1].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::ShRight => self
+                .builder
+                .build_right_shift(
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    false,
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Not => self
+                .builder
+                .build_not(args[0].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Negate => self
+                .builder
+                .build_int_neg(args[0].into_int_value(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpEq => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpNE => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpGt => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::UGT,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpLt => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::ULT,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpGE => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::UGE,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::CmpLE => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::ULE,
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::IntToPtr => self
+                .builder
+                .build_int_to_ptr(
+                    args[0].into_int_value(),
+                    self.ctx.ptr_type(AddressSpace::from(0)),
+                    name,
+                )
+                .unwrap()
+                .into(),
+            uir::Builtinkind::PtrToInt => self
+                .builder
+                .build_ptr_to_int(args[0].into_pointer_value(), self.ctx.i64_type(), name)
+                .unwrap()
+                .into(),
+            uir::Builtinkind::Syscall => {
+                let asm_t = self
+                    .ctx
+                    .i64_type()
+                    .fn_type(&[self.ctx.i64_type().into(); 7], false);
+                let asm_v = self.ctx.create_inline_asm(
+                    asm_t,
+                    "syscall".into(),
+                    "=r,{rax},{rdi},{rsi},{rdx},{r8},{r9},{r10}".into(),
+                    true,
+                    false,
+                    Some(InlineAsmDialect::Intel),
+                    false,
+                );
+                self.builder
+                    .build_indirect_call(asm_t, asm_v, &[
+                        args[0].into_int_value().into(),
+                        args[1].into_int_value().into(),
+                        args[2].into_int_value().into(),
+                        args[3].into_int_value().into(),
+                        args[4].into_int_value().into(),
+                        args[5].into_int_value().into(),
+                        args[6].into_int_value().into(),
+                    ], name)
+                    .unwrap()
+                    .as_any_value_enum()
+            }
+        })
     }
 }

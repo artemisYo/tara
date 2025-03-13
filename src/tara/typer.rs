@@ -1,7 +1,7 @@
 use std::collections::BTreeMap as Map;
 use std::rc::Rc;
 
-use crate::{misc::Ivec, report, Message};
+use crate::{misc::Ivec, report, Message, Provenance};
 
 use super::{
     uir::{self, ExprId, Type, TypeId, Typekind},
@@ -115,6 +115,14 @@ impl Context<'_> {
                 self.add_constraint(Constraint::Unify(func, unapp));
                 ret
             }
+            uir::Exprkind::Builtin { builtin, args, loc } => {
+                let builtin = self.builtins(builtin, loc);
+                let args = self.expressions(args)?;
+                let ret = old_type.clone();
+                let unapp = Type::func(self.typevec, &args, &ret, loc);
+                self.add_constraint(Constraint::Unify(builtin, unapp));
+                ret
+            }
             uir::Exprkind::Tuple(expr_ids) => {
                 let mut fields = Vec::new();
                 for e in expr_ids.iter() {
@@ -185,6 +193,46 @@ impl Context<'_> {
         // probably not always needed but included for sanity
         self.add_constraint(Constraint::Unify(typ.clone(), old_type));
         Ok(typ)
+    }
+    pub fn builtins(&mut self, b: uir::Builtinkind, l: Provenance) -> Type {
+        let int_t = Type::simple(self.typevec, Typekind::Int, l);
+        let bool_t = Type::simple(self.typevec, Typekind::Bool, l);
+        let string_t = Type::simple(self.typevec, Typekind::String, l);
+        let ints = [
+            int_t.clone(),
+            int_t.clone(),
+            int_t.clone(),
+            int_t.clone(),
+            int_t.clone(),
+            int_t.clone(),
+            int_t.clone(),
+        ];
+        let int2_t = Type::tup(self.typevec, &ints[0..2], l);
+        let int7_t = Type::tup(self.typevec, &ints, l);
+        match b {
+            uir::Builtinkind::Add
+            | uir::Builtinkind::Sub
+            | uir::Builtinkind::Mul
+            | uir::Builtinkind::Div
+            | uir::Builtinkind::Mod
+            | uir::Builtinkind::And
+            | uir::Builtinkind::Or
+            | uir::Builtinkind::Xor
+            | uir::Builtinkind::ShLeft
+            | uir::Builtinkind::ShRight => Type::func(self.typevec, &int2_t, &int_t, l),
+            uir::Builtinkind::Not | uir::Builtinkind::Negate => {
+                Type::func(self.typevec, &int_t, &int_t, l)
+            }
+            uir::Builtinkind::CmpEq
+            | uir::Builtinkind::CmpNE
+            | uir::Builtinkind::CmpGt
+            | uir::Builtinkind::CmpLt
+            | uir::Builtinkind::CmpGE
+            | uir::Builtinkind::CmpLE => Type::func(self.typevec, &int2_t, &bool_t, l),
+            uir::Builtinkind::Syscall => Type::func(self.typevec, &int7_t, &int_t, l),
+            uir::Builtinkind::PtrToInt => Type::func(self.typevec, &string_t, &int_t, l),
+            uir::Builtinkind::IntToPtr => Type::func(self.typevec, &int_t, &string_t, l),
+        }
     }
 }
 

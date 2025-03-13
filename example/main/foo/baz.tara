@@ -1,0 +1,4 @@
+
+func exit(code: int) {
+    __builtin_syscall(60, code, 0, 0, 0, 0, 0);
+}

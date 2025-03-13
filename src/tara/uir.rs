@@ -58,9 +58,11 @@ impl TypeId {
                     k.replace(types, map);
                 }
             }
-            Typekind::Var(v) => if let Some(t) = map.get(&v) {
-                types[*self] = types[*t].clone()
-            },
+            Typekind::Var(v) => {
+                if let Some(t) = map.get(&v) {
+                    types[*self] = types[*t].clone()
+                }
+            }
             _ => {}
         }
     }
@@ -163,19 +165,39 @@ pub struct Type {
     pub kind: TypeId,
 }
 impl Type {
+    fn intern(typevec: &mut Typevec, kind: Typekind) -> TypeId {
+        // something fucks this up, I'm guessing replace?
+        // thread_local! {
+        //     static STATE: std::cell::RefCell<BTreeMap<Typekind, TypeId>>  = const { std::cell::RefCell::new(BTreeMap::new()) }
+        // }
+        // STATE.with(|i| {
+        //     let mut i = i.borrow_mut();
+        //     if let Some(&d) = i.get(&kind) {
+        //         return d;
+        //     }
+        //     let d = typevec.push(kind.clone());
+        //     i.insert(kind, d);
+        //     d
+        // })
+        typevec.push(kind)
+    }
+
     pub fn fmt<'a>(&'a self, typevec: &'a Typevec) -> TypekindFmt<'a> {
         typevec[self.kind].fmt(typevec)
     }
     pub fn call(typevec: &mut Typevec, func: &Type, args: &Type, loc: Provenance) -> Type {
-        let kind = typevec.push(Typekind::Call {
-            func: func.kind,
-            args: args.kind,
-        });
+        let kind = Self::intern(
+            typevec,
+            Typekind::Call {
+                func: func.kind,
+                args: args.kind,
+            },
+        );
         Type { loc, kind }
     }
 
     pub fn func(typevec: &mut Typevec, args: &Type, ret: &Type, loc: Provenance) -> Type {
-        let kind = typevec.push(Typekind::Func {
+        let kind = Self::intern(typevec, Typekind::Func {
             args: args.kind,
             ret: ret.kind,
         });
@@ -203,7 +225,7 @@ impl Type {
     }
 
     pub fn simple(typevec: &mut Typevec, kind: Typekind, loc: Provenance) -> Type {
-        let kind = typevec.push(kind);
+        let kind = Self::intern(typevec, kind);
         Type { loc, kind }
     }
 
@@ -213,8 +235,8 @@ impl Type {
 
     pub fn tup(typevec: &mut Typevec, fields: &[Type], loc: Provenance) -> Type {
         let bundle = Type::bundle(typevec, fields, loc);
-        let tup = typevec.push(Typekind::Tup);
-        let kind = typevec.push(Typekind::Call {
+        let tup = Self::intern(typevec, Typekind::Tup);
+        let kind = Self::intern(typevec, Typekind::Call {
             args: bundle.kind,
             func: tup,
         });
@@ -223,7 +245,7 @@ impl Type {
 
     pub fn bundle(typevec: &mut Typevec, fields: &[Type], loc: Provenance) -> Type {
         let kind: Vec<_> = fields.iter().map(|f| f.kind).collect();
-        let kind = typevec.push(Typekind::Bundle(kind.into()));
+        let kind = Self::intern(typevec, Typekind::Bundle(kind.into()));
         Type { loc, kind }
     }
 }
@@ -234,7 +256,7 @@ impl PartialEq for Type {
 }
 impl Eq for Type {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Typekind {
     Func { args: TypeId, ret: TypeId },
     Call { args: TypeId, func: TypeId },
@@ -280,7 +302,7 @@ impl std::fmt::Display for TypekindFmt<'_> {
                 write!(f, "(")?;
                 if !items.is_empty() {
                     write!(f, "{}", self.typevec[items[0]].fmt(self.typevec))?;
-                    for &i in &items[0..] {
+                    for &i in &items[1..] {
                         write!(f, ", {}", self.typevec[i].fmt(self.typevec))?;
                     }
                 }
@@ -351,6 +373,10 @@ impl std::fmt::Display for ExprFmt<'_> {
                 let func = self.sub(func);
                 let args = self.sub(args);
                 write!(f, "({}{} ∈ {})", func, args, typ)
+            }
+            Exprkind::Builtin { builtin, args, .. } => {
+                let args = self.sub(args);
+                write!(f, "({}{} ∈ {})", builtin, args, typ)
             }
             Exprkind::Tuple(ref expr_ids) => {
                 write!(f, "(")?;
@@ -427,6 +453,11 @@ pub enum Exprkind {
         func: ExprId,
         args: ExprId,
     },
+    Builtin {
+        builtin: Builtinkind,
+        loc: Provenance,
+        args: ExprId,
+    },
     Tuple(Rc<[ExprId]>),
     Loop(ExprId),
     Bareblock(Rc<[ExprId]>),
@@ -449,6 +480,79 @@ pub enum Exprkind {
 impl Default for Exprkind {
     fn default() -> Self {
         Exprkind::Tuple(Rc::new([]))
+    }
+}
+
+macro_rules! MkSimpleEnum {
+    ($vis:vis $enum:ident : $($name:ident),* $(,)?) => {
+        #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+        $vis enum $enum {
+            $($name),*
+        }
+        impl $enum {
+            pub const VALUES: &'static [$enum] = {
+                use $enum::*;
+                &[
+                    $($name),*
+                ]
+            };
+        }
+    };
+}
+
+MkSimpleEnum! {pub Builtinkind:
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Xor,
+    ShLeft,
+    ShRight,
+    Not,
+    Negate,
+    CmpEq,
+    CmpNE,
+    CmpGt,
+    CmpLt,
+    CmpGE,
+    CmpLE,
+    Syscall,
+    PtrToInt,
+    IntToPtr
+}
+impl Builtinkind {
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            Builtinkind::Add => "__builtin_add",
+            Builtinkind::Sub => "__builtin_sub",
+            Builtinkind::Mul => "__builtin_mul",
+            Builtinkind::Div => "__builtin_div",
+            Builtinkind::Mod => "__builtin_mod",
+            Builtinkind::And => "__builtin_and",
+            Builtinkind::Or => "__builtin_or",
+            Builtinkind::Xor => "__builtin_xor",
+            Builtinkind::ShLeft => "__builtin_shl",
+            Builtinkind::ShRight => "__builtin_shr",
+            Builtinkind::Not => "__builtin_not",
+            Builtinkind::Negate => "__builtin_negate",
+            Builtinkind::CmpEq => "__builtin_cmp_eq",
+            Builtinkind::CmpNE => "__builtin_cmp_ne",
+            Builtinkind::CmpGt => "__builtin_cmp_gt",
+            Builtinkind::CmpLt => "__builtin_cmp_lt",
+            Builtinkind::CmpGE => "__builtin_cmp_ge",
+            Builtinkind::CmpLE => "__builtin_cmp_le",
+            Builtinkind::Syscall => "__builtin_syscall",
+            Builtinkind::PtrToInt => "__builtin_ptr_to_int",
+            Builtinkind::IntToPtr => "__builtin_int_to_ptr",
+        }
+    }
+}
+impl std::fmt::Display for Builtinkind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.spelling())
     }
 }
 
@@ -512,7 +616,7 @@ fn resolve(ctx: &mut Tara, i: In) -> Out {
         let items = ctx.resolve(In { m: i.target }).items;
         if let Some(decl) = i.head {
             for &id in items.iter() {
-                if ctx.uir_items[id].name.name == decl {
+                if ctx.uir_items[id].name.name != decl {
                     continue;
                 }
                 names.insert(ctx.uir_items[id].name.name, Err(id));
@@ -607,190 +711,213 @@ impl Context<'_> {
     }
 
     fn expressions(&mut self, e: &parse::Expr) -> ExprId {
-        let (typ, kind) = match e.kind {
-            parse::Exprkind::If(ref exprs) => {
-                let [cond, smash, pass] = exprs.as_ref();
-                let cond = self.expressions(cond);
-                let smash = self.expressions(smash);
-                let pass = self.expressions(pass);
-                (
-                    self.item().locals[smash].typ.clone(),
-                    Exprkind::If { cond, smash, pass },
-                )
-            }
-            parse::Exprkind::Call(ref exprs) => {
-                let [func, args] = exprs.as_ref();
-                let func = self.expressions(func);
-                let args = self.expressions(args);
-                (self.new_typevar(e.loc), Exprkind::Call { func, args })
-            }
-            parse::Exprkind::Tuple(ref exprs) => {
-                let (types, exprs): (Vec<_>, Vec<_>) = exprs
-                    .iter()
-                    .map(|e| {
-                        let e = self.expressions(e);
-                        (self.item().locals[e].typ.clone(), e)
-                    })
-                    .unzip();
-                (
-                    Type::tup(self.typevec, &types, e.loc),
-                    Exprkind::Tuple(exprs.into()),
-                )
-            }
-            parse::Exprkind::Loop(ref expr) => {
-                // 'reserve' a local slot
-                let slot = Expr {
-                    loc: e.loc,
-                    typ: Type::unit(self.typevec, e.loc),
-                    kind: Exprkind::default(),
-                };
-                let slot = self.item().locals.push_expr(slot);
-                self.loops.push(slot);
-                let expr = self.expressions(expr);
-                self.loops.pop();
-                let typ = self.new_typevar(e.loc);
-                let kind = Exprkind::Loop(expr);
-                self.item().locals[slot] = Expr {
-                    loc: e.loc,
-                    typ,
-                    kind,
-                };
-                return slot;
-            }
-            parse::Exprkind::Bareblock(ref exprs) => {
-                let exprs: Vec<_> = exprs.iter().map(|e| self.expressions(e)).collect();
-                let typ = exprs
-                    .last()
-                    .map(|&id| self.item().locals[id].typ.clone())
-                    .unwrap_or_else(|| self.new_typevar(e.loc));
-                (typ, Exprkind::Bareblock(exprs.into()))
-            }
-            parse::Exprkind::Recall(istr) => match self.names.find(&istr) {
-                Some(&id) => {
-                    let typ = id
-                        .map_err(|e| self.items[e].typ.clone())
-                        .map(|l| self.item().locals[l].typ.clone())
-                        .unwrap_or_else(|e| e);
-                    (typ, Exprkind::Recall(id))
+        let (typ, kind) = 'switch: {
+            match e.kind {
+                parse::Exprkind::If(ref exprs) => {
+                    let [cond, smash, pass] = exprs.as_ref();
+                    let cond = self.expressions(cond);
+                    let smash = self.expressions(smash);
+                    let pass = self.expressions(pass);
+                    (
+                        self.item().locals[smash].typ.clone(),
+                        Exprkind::If { cond, smash, pass },
+                    )
                 }
-                _ => {
-                    report(
-                        self.modules,
-                        Message::error("Could not resolve the following name!", Some(e.loc)),
-                        &[],
-                    );
-                    (self.new_typevar(e.loc), Exprkind::Poison)
+                parse::Exprkind::Call(ref exprs) => {
+                    let [func, args] = exprs.as_ref();
+                    let args = self.expressions(args);
+                    let typ = self.new_typevar(e.loc);
+                    if let parse::Exprkind::Recall(n) = func.kind {
+                        for &b in Builtinkind::VALUES.iter() {
+                            if n == b.spelling().into() {
+                                break 'switch (
+                                    typ,
+                                    Exprkind::Builtin {
+                                        builtin: b,
+                                        loc: func.loc,
+                                        args,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    let func = self.expressions(func);
+                    (typ, Exprkind::Call { func, args })
                 }
-            },
-            parse::Exprkind::Number(istr) => (
-                Type::simple(self.typevec, Typekind::Int, e.loc),
-                Exprkind::Number(istr),
-            ),
-            parse::Exprkind::String(istr) => (
-                Type::simple(self.typevec, Typekind::String, e.loc),
-                Exprkind::String(istr),
-            ),
-            parse::Exprkind::Bool(istr) => (
-                Type::simple(self.typevec, Typekind::Bool, e.loc),
-                Exprkind::Bool(istr),
-            ),
-            parse::Exprkind::Let(ref binding, ref expr) => {
-                let binding = self.bindings(binding, false);
-                let expr = self.expressions(expr);
-                (
-                    Type::unit(self.typevec, e.loc),
-                    Exprkind::Let(binding, expr),
-                )
-            }
-            parse::Exprkind::Mut(ref binding, ref expr) => {
-                let binding = self.bindings(binding, true);
-                let expr = self.expressions(expr);
-                (
-                    Type::unit(self.typevec, e.loc),
-                    Exprkind::Let(binding, expr),
-                )
-            }
-            parse::Exprkind::Assign(istr, ref expr) => {
-                // TODO: reports here should get at the binding provenance, not the whole expr
-                match self.names.find(&istr.name) {
-                    Some(Ok(bid)) => {
-                        let bid = *bid;
-                        let expr = self.expressions(expr);
-                        (
-                            Type::unit(self.typevec, e.loc),
-                            Exprkind::Assign(bid, expr),
-                        )
+                parse::Exprkind::Tuple(ref exprs) => {
+                    let (types, exprs): (Vec<_>, Vec<_>) = exprs
+                        .iter()
+                        .map(|e| {
+                            let e = self.expressions(e);
+                            (self.item().locals[e].typ.clone(), e)
+                        })
+                        .unzip();
+                    (
+                        Type::tup(self.typevec, &types, e.loc),
+                        Exprkind::Tuple(exprs.into()),
+                    )
+                }
+                parse::Exprkind::Loop(ref expr) => {
+                    // 'reserve' a local slot
+                    let slot = Expr {
+                        loc: e.loc,
+                        typ: Type::unit(self.typevec, e.loc),
+                        kind: Exprkind::default(),
+                    };
+                    let slot = self.item().locals.push_expr(slot);
+                    self.loops.push(slot);
+                    let expr = self.expressions(expr);
+                    self.loops.pop();
+                    let typ = self.new_typevar(e.loc);
+                    let kind = Exprkind::Loop(expr);
+                    self.item().locals[slot] = Expr {
+                        loc: e.loc,
+                        typ,
+                        kind,
+                    };
+                    return slot;
+                }
+                parse::Exprkind::Bareblock(ref exprs) => {
+                    let exprs: Vec<_> = exprs.iter().map(|e| self.expressions(e)).collect();
+                    let typ = exprs
+                        .last()
+                        .map(|&id| self.item().locals[id].typ.clone())
+                        .unwrap_or_else(|| self.new_typevar(e.loc));
+                    (typ, Exprkind::Bareblock(exprs.into()))
+                }
+                parse::Exprkind::Recall(istr) => match self.names.find(&istr) {
+                    Some(&id) => {
+                        let typ = id
+                            .map_err(|e| self.items[e].typ.clone())
+                            .map(|l| self.item().locals[l].typ.clone())
+                            .unwrap_or_else(|e| e);
+                        (typ, Exprkind::Recall(id))
                     }
-                    Some(Err(gid)) => {
-                        report(
-                            self.modules,
-                            Message::error("The following name is not assignable!", Some(istr.loc)),
-                            // TODO: point to the name instead of the whole item
-                            &[Message::note(
-                                &format!(
-                                    "'{}' refers to a global item!",
-                                    self.items[*gid].name.name.0
-                                ),
-                                Some(self.items[*gid].name.loc),
-                            )],
-                        );
-                        self.expressions(expr);
-                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
-                    }
-                    None => {
+                    _ => {
                         report(
                             self.modules,
                             Message::error("Could not resolve the following name!", Some(e.loc)),
                             &[],
                         );
-                        self.expressions(expr);
-                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
+                        (self.new_typevar(e.loc), Exprkind::Poison)
                     }
-                }
-            }
-            parse::Exprkind::Break(ref expr) => match self.loops.last() {
-                Some(&target) => {
-                    let val = if let Some(expr) = expr {
-                        self.expressions(expr)
-                    } else {
-                        let val = Expr {
-                            loc: e.loc,
-                            typ: Type::unit(self.typevec, e.loc),
-                            kind: Exprkind::default(),
-                        };
-                        self.item().locals.push_expr(val)
-                    };
+                },
+                parse::Exprkind::Number(istr) => (
+                    Type::simple(self.typevec, Typekind::Int, e.loc),
+                    Exprkind::Number(istr),
+                ),
+                parse::Exprkind::String(istr) => (
+                    Type::simple(self.typevec, Typekind::String, e.loc),
+                    Exprkind::String(istr),
+                ),
+                parse::Exprkind::Bool(istr) => (
+                    Type::simple(self.typevec, Typekind::Bool, e.loc),
+                    Exprkind::Bool(istr),
+                ),
+                parse::Exprkind::Let(ref binding, ref expr) => {
+                    let binding = self.bindings(binding, false);
+                    let expr = self.expressions(expr);
                     (
                         Type::unit(self.typevec, e.loc),
-                        Exprkind::Break { val, target },
+                        Exprkind::Let(binding, expr),
                     )
                 }
-                None => {
-                    report(
-                        self.modules,
-                        Message::error("This break is not contained by any loops!", Some(e.loc)),
-                        &[],
-                    );
-                    (Type::unit(self.typevec, e.loc), Exprkind::Poison)
+                parse::Exprkind::Mut(ref binding, ref expr) => {
+                    let binding = self.bindings(binding, true);
+                    let expr = self.expressions(expr);
+                    (
+                        Type::unit(self.typevec, e.loc),
+                        Exprkind::Let(binding, expr),
+                    )
                 }
-            },
-            parse::Exprkind::Return(None) => {
-                let expr = Expr {
-                    loc: e.loc,
-                    typ: Type::unit(self.typevec, e.loc),
-                    kind: Exprkind::default(),
-                };
-                let expr = self.item().locals.push_expr(expr);
-                (Type::unit(self.typevec, e.loc), Exprkind::Return(expr))
+                parse::Exprkind::Assign(istr, ref expr) => {
+                    // TODO: reports here should get at the binding provenance, not the whole expr
+                    match self.names.find(&istr.name) {
+                        Some(Ok(bid)) => {
+                            let bid = *bid;
+                            let expr = self.expressions(expr);
+                            (Type::unit(self.typevec, e.loc), Exprkind::Assign(bid, expr))
+                        }
+                        Some(Err(gid)) => {
+                            report(
+                                self.modules,
+                                Message::error(
+                                    "The following name is not assignable!",
+                                    Some(istr.loc),
+                                ),
+                                // TODO: point to the name instead of the whole item
+                                &[Message::note(
+                                    &format!(
+                                        "'{}' refers to a global item!",
+                                        self.items[*gid].name.name.0
+                                    ),
+                                    Some(self.items[*gid].name.loc),
+                                )],
+                            );
+                            self.expressions(expr);
+                            (Type::unit(self.typevec, e.loc), Exprkind::Poison)
+                        }
+                        None => {
+                            report(
+                                self.modules,
+                                Message::error(
+                                    "Could not resolve the following name!",
+                                    Some(e.loc),
+                                ),
+                                &[],
+                            );
+                            self.expressions(expr);
+                            (Type::unit(self.typevec, e.loc), Exprkind::Poison)
+                        }
+                    }
+                }
+                parse::Exprkind::Break(ref expr) => match self.loops.last() {
+                    Some(&target) => {
+                        let val = if let Some(expr) = expr {
+                            self.expressions(expr)
+                        } else {
+                            let val = Expr {
+                                loc: e.loc,
+                                typ: Type::unit(self.typevec, e.loc),
+                                kind: Exprkind::default(),
+                            };
+                            self.item().locals.push_expr(val)
+                        };
+                        (
+                            Type::unit(self.typevec, e.loc),
+                            Exprkind::Break { val, target },
+                        )
+                    }
+                    None => {
+                        report(
+                            self.modules,
+                            Message::error(
+                                "This break is not contained by any loops!",
+                                Some(e.loc),
+                            ),
+                            &[],
+                        );
+                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
+                    }
+                },
+                parse::Exprkind::Return(None) => {
+                    let expr = Expr {
+                        loc: e.loc,
+                        typ: Type::unit(self.typevec, e.loc),
+                        kind: Exprkind::default(),
+                    };
+                    let expr = self.item().locals.push_expr(expr);
+                    (Type::unit(self.typevec, e.loc), Exprkind::Return(expr))
+                }
+                parse::Exprkind::Return(Some(ref expr)) => (
+                    Type::unit(self.typevec, e.loc),
+                    Exprkind::Return(self.expressions(expr)),
+                ),
+                parse::Exprkind::Const(ref expr) => (
+                    Type::unit(self.typevec, e.loc),
+                    Exprkind::Const(self.expressions(expr)),
+                ),
             }
-            parse::Exprkind::Return(Some(ref expr)) => (
-                Type::unit(self.typevec, e.loc),
-                Exprkind::Return(self.expressions(expr)),
-            ),
-            parse::Exprkind::Const(ref expr) => (
-                Type::unit(self.typevec, e.loc),
-                Exprkind::Const(self.expressions(expr)),
-            ),
         };
         self.item().locals.push_expr(Expr {
             loc: e.loc,

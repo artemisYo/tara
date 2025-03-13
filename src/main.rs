@@ -197,7 +197,7 @@ pub fn report(ctx: &Ivec<ModuleId, Module>, head: Message, extra: &[Message]) {
 }
 
 fn main() {
-    let mut ctx = Tara::from("example/main.tara");
+    let mut ctx = Tara::from("rule110/main.tara");
     report(
         &ctx.modules,
         Message {
@@ -263,51 +263,26 @@ fn main() {
     // }
 
     let resolution = ctx.resolve(uir::In { m: ctx.entry });
-    let mut main_id = None;
     let mut _start = None;
-    for i in resolution.items.iter() {
-        let uir = ctx.get_uir(*i);
-        if uir.name.name.0 == "_start" {
-            _start = Some(*i);
-        }
-        if uir.name.name.0 == "main" {
-            main_id = Some(*i);
-        }
-    }
-
-    {
-        let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}\n", main_fmt);
-    }
-
-    let subst = ctx.typeck(typer::In {
-        i: main_id.unwrap(),
-    });
-    for (a, b) in subst.substitutions.iter() {
-        println!("?{} := {}", a, ctx.uir_types[*b].fmt(&ctx.uir_types));
-    }
-
-    {
-        let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}\n", main_fmt);
-    }
-
-    ctx.fill(fill::In {
-        i: main_id.unwrap(),
-    });
-
-    {
-        let main_fmt = ctx.uir_items[main_id.unwrap()].fmt(&ctx.uir_types, &ctx.uir_items);
-        println!("{}\n", main_fmt);
-    }
-
+    // println!("---After resolution:");
     for &i in resolution.items.iter() {
-        ctx.fill(fill::In { i });
+        let uir = ctx.get_uir(i);
+        if uir.name.name.0 == "_start" {
+            _start = Some(i);
+        }
+        // let fmt = ctx.uir_items[i].fmt(&ctx.uir_types, &ctx.uir_items);
+        // println!("{}\n", fmt);
     }
 
-    // ctx.codegen(codegen::In { i: main_id.unwrap() });
+    // println!("---After filling:");
+    // for &i in resolution.items.iter() {
+    //     ctx.fill(fill::In { i });
+    //     let fmt = ctx.uir_items[i].fmt(&ctx.uir_types, &ctx.uir_items);
+    //     println!("{}\n", fmt);
+    // }
+
     ctx.codegen(codegen::In { i: _start.unwrap() });
-    ctx.llvm_mod.print_to_stderr();
+    // ctx.llvm_mod.print_to_stderr();
     match ctx.llvm_mod.verify() {
         Ok(()) => {}
         Err(msg) => {

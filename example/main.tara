@@ -1,39 +1,19 @@
 
 import main/foo/...;
-
-func <(a: int, b: int): bool = true;
-func -(a: int, b: int): int = 1;
-func +(a: int, b: int): int = 1;
+import main/foo/baz/exit;
 
 func fib(n: int): int = if n < 2 {
-    return n;
+    n
 } else {
-    return fib(n - 2) + fib(n - 1);
+    fib(n - 2) + fib(n - 1)
 }
 
-func test() {}
-
 func main(): int {
-    let an-str = "multiline strings can be done
-        "using consecutive newline-delimited ones.
-        "using an escape '\\' as the last character \
-        "in a line, removes the line break.
-        "normal escape sequences are\nalso\tsupported
-    ;
-    let another!string = "this is a string";
-    operator(3, &&, 4);
-    let () = fib(5);
-    // let out = 5;
-    // out = 5;
-    // fuck = fuck;
-    // return fib(5);
-    return fib(5);
+    return fib(6);
 }
 
 func _start() {
     let code = main();
+    // __builtin_syscall(60, code, 0, 0, 0, 0, 0);
+    exit(code);
 }
-
-// this is a comment
-// operator(_, !, 5);
-

@@ -332,15 +332,27 @@ impl Parser<'_> {
     }
 
     fn type_op(&mut self, prec: u32) -> Type {
-        let mut left = if self.type_atom_first() {
-            self.type_atom()
-        } else {
+        let mut left = if self.type_op_left_first() {
             self.type_op_left()
+        } else {
+            self.type_atom()
         };
         while self.type_op_right_first(prec) {
             left = self.type_op_right(prec, left);
         }
         left
+    }
+
+    fn type_op_left_first(&mut self) -> bool {
+        for o in self.ops.clone().iter() {
+            if o.lbp.is_some() {
+                continue;
+            }
+            if self.next_is_text(o.spelling) {
+                return true;
+            }
+        }
+        false
     }
 
     fn type_op_left(&mut self) -> Type {
@@ -367,7 +379,7 @@ impl Parser<'_> {
     }
 
     fn type_op_right_first(&self, prec: u32) -> bool {
-        if self.type_atom_first() {
+        if self.next_is(Tokenkind::OpenParen) {
             return true;
         }
         for o in self.ops.clone().iter() {
@@ -382,6 +394,16 @@ impl Parser<'_> {
     }
 
     fn type_op_right(&mut self, prec: u32, left: Type) -> Type {
+        if self.next_is(Tokenkind::OpenParen) {
+            let args = Box::new(self.type_parenthesised());
+            return Type {
+                loc: left.loc.meet(&args.loc),
+                kind: Typekind::Call {
+                    args,
+                    func: Box::new(left),
+                },
+            };
+        }
         for o in self.ops.clone().iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
@@ -408,21 +430,7 @@ impl Parser<'_> {
                 };
             }
         }
-        if self.type_atom_first() {
-            let args = Box::new(self.type_atom());
-            return Type {
-                loc: left.loc.meet(&args.loc),
-                kind: Typekind::Call {
-                    args,
-                    func: Box::new(left),
-                },
-            };
-        }
         unreachable!("because loops on type_op_right_first()");
-    }
-
-    fn type_atom_first(&self) -> bool {
-        self.next_is(Tokenkind::OpenParen) || self.next_is(Tokenkind::Name)
     }
 
     fn type_atom(&mut self) -> Type {
@@ -589,15 +597,27 @@ impl Parser<'_> {
     }
 
     fn expr_op(&mut self, prec: u32) -> Expr {
-        let mut left = if self.expr_atom_first() {
-            self.expr_atom()
-        } else {
+        let mut left = if self.expr_op_left_first() {
             self.expr_op_left()
+        } else {
+            self.expr_atom()
         };
         while self.expr_op_right_first(prec) {
             left = self.expr_op_right(prec, left);
         }
         left
+    }
+
+    fn expr_op_left_first(&mut self) -> bool {
+        for o in self.ops.clone().iter() {
+            if o.lbp.is_some() {
+                continue;
+            }
+            if self.next_is_text(o.spelling) {
+                return true;
+            }
+        }
+        false
     }
 
     fn expr_op_left(&mut self) -> Expr {
@@ -624,7 +644,7 @@ impl Parser<'_> {
     }
 
     fn expr_op_right_first(&self, prec: u32) -> bool {
-        if self.expr_atom_first() {
+        if self.next_is(Tokenkind::OpenParen) {
             return true;
         }
         for o in self.ops.clone().iter() {
@@ -639,6 +659,13 @@ impl Parser<'_> {
     }
 
     fn expr_op_right(&mut self, prec: u32, left: Expr) -> Expr {
+        if self.next_is(Tokenkind::OpenParen) {
+            let args = self.expr_parenthesised();
+            return Expr {
+                loc: left.loc.meet(&args.loc),
+                kind: Exprkind::Call(Box::new([left, args])),
+            };
+        }
         for o in self.ops.clone().iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
@@ -665,22 +692,7 @@ impl Parser<'_> {
                 };
             }
         }
-        if self.expr_atom_first() {
-            let args = self.expr_atom();
-            return Expr {
-                loc: left.loc.meet(&args.loc),
-                kind: Exprkind::Call(Box::new([left, args])),
-            };
-        }
         unreachable!("because loops on expr_op_right_first()");
-    }
-
-    fn expr_atom_first(&self) -> bool {
-        use Tokenkind::*;
-        matches!(
-            self.peek().map(|t| t.kind),
-            Some(OpenParen) | Some(Name) | Some(String) | Some(Number) | Some(Bool)
-        )
     }
 
     fn expr_atom(&mut self) -> Expr {
@@ -800,7 +812,7 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Exprkind::Let(binding, Box::new(init)),
+            kind: Exprkind::Mut(binding, Box::new(init)),
         }
     }
 
