@@ -32,19 +32,81 @@ impl Tara {
 }
 
 MkIndexer!(pub Id, u32);
+impl Id {
+    pub fn into_typedecl(self) -> TypedeclId {
+        TypedeclId(self)
+    }
+    pub fn into_func(self) -> FuncId {
+        FuncId(self)
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct TypedeclId(Id);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct FuncId(Id);
+impl From<FuncId> for Id {
+    fn from(v: FuncId) -> Self {
+        v.0
+    }
+}
+impl std::ops::Index<TypedeclId> for Ivec<Id, Item> {
+    type Output = Typedecl;
+
+    fn index(&self, index: TypedeclId) -> &Self::Output {
+        match self[index.0] {
+            Item::Typedecl(ref t) => t,
+            Item::Function(_) => unreachable!(),
+        }
+    }
+}
+impl std::ops::IndexMut<TypedeclId> for Ivec<Id, Item> {
+    fn index_mut(&mut self, index: TypedeclId) -> &mut Self::Output {
+        match self[index.0] {
+            Item::Typedecl(ref mut t) => t,
+            Item::Function(_) => unreachable!(),
+        }
+    }
+}
+impl std::ops::Index<FuncId> for Ivec<Id, Item> {
+    type Output = Function;
+
+    fn index(&self, index: FuncId) -> &Self::Output {
+        match self[index.0] {
+            Item::Function(ref t) => t,
+            Item::Typedecl(_) => unreachable!(),
+        }
+    }
+}
+impl std::ops::IndexMut<FuncId> for Ivec<Id, Item> {
+    fn index_mut(&mut self, index: FuncId) -> &mut Self::Output {
+        match self[index.0] {
+            Item::Function(ref mut t) => t,
+            Item::Typedecl(_) => unreachable!(),
+        }
+    }
+}
+impl std::ops::Index<FuncId> for Ivec<Id, Interface> {
+    type Output = FunctionInter;
+
+    fn index(&self, index: FuncId) -> &Self::Output {
+        match self[index.0] {
+            Interface::Function(ref f) => f,
+            Interface::Typedecl(_) => unreachable!(),
+        }
+    }
+}
+
 MkIndexer!(pub LocalId, u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ExprId(LocalId);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct BindingId(LocalId);
-// #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-// pub struct TypekindId(LocalId);
 MkIndexer!(pub TypeId, u32);
 type Typevec = Ivec<TypeId, Typekind>;
 
 impl TypeId {
-    pub fn replace(&self, types: &mut Typevec, map: &std::collections::BTreeMap<usize, TypeId>) {
-        match types[*self].clone() {
+    pub fn replace(self, types: &mut Typevec, map: &std::collections::BTreeMap<usize, TypeId>) {
+        match types[self].clone() {
             Typekind::Func { args, ret } => {
                 args.replace(types, map);
                 ret.replace(types, map);
@@ -60,7 +122,7 @@ impl TypeId {
             }
             Typekind::Var(v) => {
                 if let Some(t) = map.get(&v) {
-                    types[*self] = types[*t].clone()
+                    types[self] = types[*t].clone()
                 }
             }
             _ => {}
@@ -122,44 +184,114 @@ impl std::ops::Index<BindingId> for LocalVec {
     }
 }
 
-pub struct Function {
-    pub loc: Provenance,
-    pub name: Ident,
-    pub typ: Type,
-    pub body: ExprId,
-    pub locals: LocalVec,
-    tvar_count: usize,
+impl Tara {
+    fn push_expr(&mut self, locals: Id, e: Expr) -> ExprId {
+        self.uir_locals[locals].push_expr(e)
+    }
 }
-impl Function {
-    pub fn fmt<'a>(
-        &'a self,
-        typevec: &'a Typevec,
-        items: &'a Ivec<Id, Function>,
-    ) -> FunctionFmt<'a> {
-        FunctionFmt {
-            func: self,
-            typevec,
-            items,
+
+pub enum Item {
+    Typedecl(Typedecl),
+    Function(Function),
+}
+impl Item {
+    pub fn function(&mut self) -> &mut Function {
+        match self {
+            Item::Function(f) => f,
+            _ => panic!(),
+        }
+    }
+    // pub fn name(&self) -> Ident {
+    //     match self {
+    //         Item::Typedecl(i) => i.name,
+    //         Item::Function(i) => i.name,
+    //     }
+    // }
+}
+
+pub enum Interface {
+    Typedecl(TypedeclInter),
+    Function(FunctionInter),
+}
+impl Interface {
+    pub fn into_func(&mut self) -> &mut FunctionInter {
+        match self {
+            Interface::Typedecl(_) => panic!("expected a function, but got a typedecl!"),
+            Interface::Function(f) => f,
+        }
+    }
+    pub fn name(&self) -> Ident {
+        match self {
+            Interface::Typedecl(t) => t.name,
+            Interface::Function(f) => f.name,
         }
     }
 }
 
-pub struct FunctionFmt<'a> {
-    func: &'a Function,
-    typevec: &'a Typevec,
-    items: &'a Ivec<Id, Function>,
+pub struct Typedecl {
+    // pub loc: Provenance,
+    // pub name: Ident,
+    // pub cases: Vec<Typecase>,
 }
-impl std::fmt::Display for FunctionFmt<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self.func.name.name.0;
-        let typ = self.func.typ.fmt(self.typevec);
-        let body =
-            self.func.locals[self.func.body].fmt(&self.func.locals, self.typevec, self.items, 0);
-        write!(f, "func ({} ∈ {}) {}", name, typ, body)
-    }
+pub struct TypedeclInter {
+    pub loc: Provenance,
+    pub name: Ident,
+    pub cases: Vec<Typecase>,
 }
 
-#[derive(Clone, Debug)]
+pub struct Typecase {
+    pub loc: Provenance,
+    pub name: Ident,
+    pub binding: BindingId,
+}
+
+pub struct Function {
+    // pub loc: Provenance,
+    // pub name: Ident,
+    // pub typ: Type,
+    pub body: ExprId,
+}
+pub struct FunctionInter {
+    pub loc: Provenance,
+    pub name: Ident,
+    pub typ: Type,
+}
+
+// impl Function {
+//     pub fn fmt<'a>(
+//         &'a self,
+//         inter: &'a FunctionInter,
+//         locals: &'a LocalVec,
+//         typevec: &'a Typevec,
+//         items: &'a Ivec<Id, Function>,
+//     ) -> FunctionFmt<'a> {
+//         FunctionFmt {
+//             func: self,
+//             typevec,
+//             locals,
+//             inter,
+//             items,
+//         }
+//     }
+// }
+
+// pub struct FunctionFmt<'a> {
+//     func: &'a Function,
+//     inter: &'a FunctionInter,
+//     locals: &'a LocalVec,
+//     typevec: &'a Typevec,
+//     items: &'a Ivec<Id, Function>,
+// }
+// impl std::fmt::Display for FunctionFmt<'_> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let name = self.inter.name.name.0;
+//         let typ = self.inter.typ.fmt(self.typevec);
+//         let body = self.locals[self.func.body].fmt(self.locals, self.typevec, self.items, 0);
+//         write!(f, "func ({} ∈ {}) {}", name, typ, body)
+//     }
+// }
+
+#[derive(Clone, Copy, Debug)]
 pub struct Type {
     pub loc: Provenance,
     pub kind: TypeId,
@@ -185,7 +317,8 @@ impl Type {
     pub fn fmt<'a>(&'a self, typevec: &'a Typevec) -> TypekindFmt<'a> {
         typevec[self.kind].fmt(typevec)
     }
-    pub fn call(typevec: &mut Typevec, func: &Type, args: &Type, loc: Provenance) -> Type {
+
+    pub fn call(typevec: &mut Typevec, func: Type, args: Type, loc: Provenance) -> Type {
         let kind = Self::intern(
             typevec,
             Typekind::Call {
@@ -196,11 +329,14 @@ impl Type {
         Type { loc, kind }
     }
 
-    pub fn func(typevec: &mut Typevec, args: &Type, ret: &Type, loc: Provenance) -> Type {
-        let kind = Self::intern(typevec, Typekind::Func {
-            args: args.kind,
-            ret: ret.kind,
-        });
+    pub fn func(typevec: &mut Typevec, args: Type, ret: Type, loc: Provenance) -> Type {
+        let kind = Self::intern(
+            typevec,
+            Typekind::Func {
+                args: args.kind,
+                ret: ret.kind,
+            },
+        );
         Type { loc, kind }
     }
 
@@ -236,10 +372,13 @@ impl Type {
     pub fn tup(typevec: &mut Typevec, fields: &[Type], loc: Provenance) -> Type {
         let bundle = Type::bundle(typevec, fields, loc);
         let tup = Self::intern(typevec, Typekind::Tup);
-        let kind = Self::intern(typevec, Typekind::Call {
-            args: bundle.kind,
-            func: tup,
-        });
+        let kind = Self::intern(
+            typevec,
+            Typekind::Call {
+                args: bundle.kind,
+                func: tup,
+            },
+        );
         Type { kind, loc }
     }
 
@@ -317,6 +456,7 @@ impl std::fmt::Display for TypekindFmt<'_> {
         }
     }
 }
+
 #[derive(Debug)]
 pub enum Locals {
     Expr(Expr),
@@ -329,118 +469,118 @@ pub struct Expr {
     pub typ: Type,
     pub kind: Exprkind,
 }
-impl Expr {
-    pub fn fmt<'a>(
-        &'a self,
-        locals: &'a LocalVec,
-        typevec: &'a Typevec,
-        items: &'a Ivec<Id, Function>,
-        nesting: usize,
-    ) -> ExprFmt<'a> {
-        ExprFmt {
-            expr: self,
-            locals,
-            typevec,
-            items,
-            nesting,
-        }
-    }
-}
+// impl Expr {
+//     pub fn fmt<'a>(
+//         &'a self,
+//         locals: &'a LocalVec,
+//         typevec: &'a Typevec,
+//         items: &'a Ivec<Id, Function>,
+//         nesting: usize,
+//     ) -> ExprFmt<'a> {
+//         ExprFmt {
+//             expr: self,
+//             locals,
+//             typevec,
+//             items,
+//             nesting,
+//         }
+//     }
+// }
 
-pub struct ExprFmt<'a> {
-    expr: &'a Expr,
-    locals: &'a LocalVec,
-    typevec: &'a Typevec,
-    items: &'a Ivec<Id, Function>,
-    nesting: usize,
-}
-impl ExprFmt<'_> {
-    fn sub(&self, id: ExprId) -> Self {
-        self.locals[id].fmt(self.locals, self.typevec, self.items, self.nesting + 1)
-    }
-}
-impl std::fmt::Display for ExprFmt<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let typ = self.expr.typ.fmt(self.typevec);
-        match self.expr.kind {
-            Exprkind::If { cond, smash, pass } => {
-                let cond = self.sub(cond);
-                let smash = self.sub(smash);
-                let pass = self.sub(pass);
-                write!(f, "(if {} {} else {} ∈ {})", cond, smash, pass, typ)
-            }
-            Exprkind::Call { func, args } => {
-                let func = self.sub(func);
-                let args = self.sub(args);
-                write!(f, "({}{} ∈ {})", func, args, typ)
-            }
-            Exprkind::Builtin { builtin, args, .. } => {
-                let args = self.sub(args);
-                write!(f, "({}{} ∈ {})", builtin, args, typ)
-            }
-            Exprkind::Tuple(ref expr_ids) => {
-                write!(f, "(")?;
-                if let Some(&e1) = expr_ids.first() {
-                    let e1 = self.sub(e1);
-                    write!(f, "{}", e1)?;
-                    for &ex in &expr_ids[1..] {
-                        let ex = self.sub(ex);
-                        write!(f, ", {}", ex)?;
-                    }
-                }
-                write!(f, ")")
-            }
-            Exprkind::Loop(expr_id) => {
-                let body = self.sub(expr_id);
-                write!(f, "(loop {} ∈ {})", body, typ)
-            }
-            Exprkind::Bareblock(ref expr_ids) => {
-                writeln!(f, "({{")?;
-                for &e in expr_ids.as_ref() {
-                    for _ in 0..self.nesting + 1 {
-                        write!(f, "  ")?;
-                    }
-                    let e = self.sub(e);
-                    writeln!(f, "{}", e)?;
-                }
-                for _ in 0..self.nesting {
-                    write!(f, "  ")?;
-                }
-                write!(f, "}})")
-            }
-            Exprkind::Recall(binding_id) => {
-                let binding = match binding_id {
-                    Ok(b) => {
-                        if let Bindkind::Name(n, _) = self.locals[b].kind {
-                            n.0
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    Err(i) => self.items[i].name.name.0,
-                };
-                write!(f, "({} ∈ {})", binding, typ)
-            }
-            Exprkind::Number(istr) | Exprkind::Bool(istr) => write!(f, "{}", istr.0),
-            Exprkind::String(istr) => write!(f, "{:?}", istr.0),
-            Exprkind::Arguments => write!(f, "Args"),
-            Exprkind::Poison => write!(f, "(!!)"),
-            Exprkind::Let(binding_id, expr_id) => {
-                let binding = self.locals[binding_id].fmt(self.locals, self.typevec);
-                let expr = self.sub(expr_id);
-                write!(f, "let {} = {}", binding, expr)
-            }
-            Exprkind::Assign(binding_id, expr_id) => {
-                let binding = self.locals[binding_id].fmt(self.locals, self.typevec);
-                let expr = self.sub(expr_id);
-                write!(f, "{} = {}", binding, expr)
-            }
-            Exprkind::Break { val, .. } => write!(f, "break {}", self.sub(val)),
-            Exprkind::Return(expr_id) => write!(f, "return {}", self.sub(expr_id)),
-            Exprkind::Const(expr_id) => write!(f, "{};", self.sub(expr_id)),
-        }
-    }
-}
+// pub struct ExprFmt<'a> {
+//     expr: &'a Expr,
+//     locals: &'a LocalVec,
+//     typevec: &'a Typevec,
+//     items: &'a Ivec<Id, Function>,
+//     nesting: usize,
+// }
+// impl ExprFmt<'_> {
+//     fn sub(&self, id: ExprId) -> Self {
+//         self.locals[id].fmt(self.locals, self.typevec, self.items, self.nesting + 1)
+//     }
+// }
+// impl std::fmt::Display for ExprFmt<'_> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let typ = self.expr.typ.fmt(self.typevec);
+//         match self.expr.kind {
+//             Exprkind::If { cond, smash, pass } => {
+//                 let cond = self.sub(cond);
+//                 let smash = self.sub(smash);
+//                 let pass = self.sub(pass);
+//                 write!(f, "(if {} {} else {} ∈ {})", cond, smash, pass, typ)
+//             }
+//             Exprkind::Call { func, args } => {
+//                 let func = self.sub(func);
+//                 let args = self.sub(args);
+//                 write!(f, "({}{} ∈ {})", func, args, typ)
+//             }
+//             Exprkind::Builtin { builtin, args, .. } => {
+//                 let args = self.sub(args);
+//                 write!(f, "({}{} ∈ {})", builtin, args, typ)
+//             }
+//             Exprkind::Tuple(ref expr_ids) => {
+//                 write!(f, "(")?;
+//                 if let Some(&e1) = expr_ids.first() {
+//                     let e1 = self.sub(e1);
+//                     write!(f, "{}", e1)?;
+//                     for &ex in &expr_ids[1..] {
+//                         let ex = self.sub(ex);
+//                         write!(f, ", {}", ex)?;
+//                     }
+//                 }
+//                 write!(f, ")")
+//             }
+//             Exprkind::Loop(expr_id) => {
+//                 let body = self.sub(expr_id);
+//                 write!(f, "(loop {} ∈ {})", body, typ)
+//             }
+//             Exprkind::Bareblock(ref expr_ids) => {
+//                 writeln!(f, "({{")?;
+//                 for &e in expr_ids.as_ref() {
+//                     for _ in 0..self.nesting + 1 {
+//                         write!(f, "  ")?;
+//                     }
+//                     let e = self.sub(e);
+//                     writeln!(f, "{}", e)?;
+//                 }
+//                 for _ in 0..self.nesting {
+//                     write!(f, "  ")?;
+//                 }
+//                 write!(f, "}})")
+//             }
+//             Exprkind::Recall(binding_id) => {
+//                 let binding = match binding_id {
+//                     Ok(b) => {
+//                         if let Bindkind::Name(n, _) = self.locals[b].kind {
+//                             n.0
+//                         } else {
+//                             unreachable!()
+//                         }
+//                     }
+//                     Err(i) => self.items[i].name.name.0,
+//                 };
+//                 write!(f, "({} ∈ {})", binding, typ)
+//             }
+//             Exprkind::Number(istr) | Exprkind::Bool(istr) => write!(f, "{}", istr.0),
+//             Exprkind::String(istr) => write!(f, "{:?}", istr.0),
+//             Exprkind::Arguments => write!(f, "Args"),
+//             Exprkind::Poison => write!(f, "(!!)"),
+//             Exprkind::Let(binding_id, expr_id) => {
+//                 let binding = self.locals[binding_id].fmt(self.locals, self.typevec);
+//                 let expr = self.sub(expr_id);
+//                 write!(f, "let {} = {}", binding, expr)
+//             }
+//             Exprkind::Assign(binding_id, expr_id) => {
+//                 let binding = self.locals[binding_id].fmt(self.locals, self.typevec);
+//                 let expr = self.sub(expr_id);
+//                 write!(f, "{} = {}", binding, expr)
+//             }
+//             Exprkind::Break { val, .. } => write!(f, "break {}", self.sub(val)),
+//             Exprkind::Return(expr_id) => write!(f, "return {}", self.sub(expr_id)),
+//             Exprkind::Const(expr_id) => write!(f, "{};", self.sub(expr_id)),
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub enum Exprkind {
@@ -453,11 +593,7 @@ pub enum Exprkind {
         func: ExprId,
         args: ExprId,
     },
-    Builtin {
-        builtin: Builtinkind,
-        loc: Provenance,
-        args: ExprId,
-    },
+    Builtin(Builtinkind),
     Tuple(Rc<[ExprId]>),
     Loop(ExprId),
     Bareblock(Rc<[ExprId]>),
@@ -562,44 +698,44 @@ pub struct Binding {
     pub typ: Type,
     pub kind: Bindkind,
 }
-impl Binding {
-    pub fn fmt<'a>(&'a self, locals: &'a LocalVec, typevec: &'a Typevec) -> BindingFmt<'a> {
-        BindingFmt {
-            bind: self,
-            locals,
-            typevec,
-        }
-    }
-}
+// impl Binding {
+//     pub fn fmt<'a>(&'a self, locals: &'a LocalVec, typevec: &'a Typevec) -> BindingFmt<'a> {
+//         BindingFmt {
+//             bind: self,
+//             locals,
+//             typevec,
+//         }
+//     }
+// }
 
-pub struct BindingFmt<'a> {
-    bind: &'a Binding,
-    locals: &'a LocalVec,
-    typevec: &'a Typevec,
-}
-impl std::fmt::Display for BindingFmt<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let typ = self.bind.typ.fmt(self.typevec);
-        match self.bind.kind {
-            Bindkind::Empty => write!(f, "(∅ ∈ {})", typ),
-            Bindkind::Name(istr, m) => {
-                write!(f, "({} ∈ {}{})", istr.0, if m { "mut " } else { "" }, typ)
-            }
-            Bindkind::Tuple(ref binding_ids) => {
-                write!(f, "(")?;
-                if let Some(&b1) = binding_ids.first() {
-                    let b1 = self.locals[b1].fmt(self.locals, self.typevec);
-                    write!(f, "{}", b1)?;
-                    for &bx in &binding_ids[1..] {
-                        let bx = self.locals[bx].fmt(self.locals, self.typevec);
-                        write!(f, ", {}", bx)?;
-                    }
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
+// pub struct BindingFmt<'a> {
+//     bind: &'a Binding,
+//     locals: &'a LocalVec,
+//     typevec: &'a Typevec,
+// }
+// impl std::fmt::Display for BindingFmt<'_> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let typ = self.bind.typ.fmt(self.typevec);
+//         match self.bind.kind {
+//             Bindkind::Empty => write!(f, "(∅ ∈ {})", typ),
+//             Bindkind::Name(istr, m) => {
+//                 write!(f, "({} ∈ {}{})", istr.0, if m { "mut " } else { "" }, typ)
+//             }
+//             Bindkind::Tuple(ref binding_ids) => {
+//                 write!(f, "(")?;
+//                 if let Some(&b1) = binding_ids.first() {
+//                     let b1 = self.locals[b1].fmt(self.locals, self.typevec);
+//                     write!(f, "{}", b1)?;
+//                     for &bx in &binding_ids[1..] {
+//                         let bx = self.locals[bx].fmt(self.locals, self.typevec);
+//                         write!(f, ", {}", bx)?;
+//                     }
+//                 }
+//                 write!(f, ")")
+//             }
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 pub enum Bindkind {
@@ -616,418 +752,695 @@ fn resolve(ctx: &mut Tara, i: In) -> Out {
         let items = ctx.resolve(In { m: i.target }).items;
         if let Some(decl) = i.head {
             for &id in items.iter() {
-                if ctx.uir_items[id].name.name != decl {
+                if ctx.item_name(id).name != decl {
                     continue;
                 }
-                names.insert(ctx.uir_items[id].name.name, Err(id));
+                names.insert(ctx.item_name(id).name, Err(id));
                 break;
             }
         } else {
             for &id in items.iter() {
-                names.insert(ctx.uir_items[id].name.name, Err(id));
+                names.insert(ctx.item_name(id).name, Err(id));
             }
         }
     }
     let mut items = Vec::new();
-    for f in ast.ast.funcs.iter() {
+    for i in ast.ast.items.iter() {
         let locals = LocalVec::default();
-        let typ = {
-            let args = binding_type(&mut ctx.uir_types, &mut 0, &f.args);
-            let ret = types(&mut ctx.uir_types, &f.ret);
-            Type::func(&mut ctx.uir_types, &args, &ret, f.loc)
-        };
-        let body = locals.promise_expr();
-        // ^ this is just a placeholder, it will be replaced in self.functions
-        let id = ctx.uir_items.push(Function {
-            tvar_count: 0,
-            loc: f.loc,
-            name: f.name,
-            typ,
-            body,
-            locals,
-        });
+        let locals = ctx.uir_locals.push(locals);
+        let (name, inter) = i.interface(locals, ctx);
+        let id = locals;
+        ctx.uir_interfaces.register(inter, id).expect("yaeh");
         items.push(id);
-        names.insert(f.name.name, Err(id));
+        names.insert(name, Err(id))
     }
-    let names_start = names.len();
-    for (f, &id) in ast.ast.funcs.iter().zip(items.iter()) {
-        Context {
-            modules: &mut ctx.modules,
-            items: &mut ctx.uir_items,
-            typevec: &mut ctx.uir_types,
-            func: id,
-            names: &mut names,
-            loops: Vec::new(),
-        }
-        .functions(f);
-        names.truncate(names_start);
+    for (i, &locals) in ast.ast.items.iter().zip(items.iter()) {
+        let item = names.excursion(|names| i.convert(locals, names, ctx));
+        let id = locals;
+        ctx.uir_items.register(item, id).expect("yaeh");
     }
     Out {
         items: items.into(),
     }
 }
 
-struct Context<'a> {
-    func: Id,
-    modules: &'a Ivec<ModuleId, Module>,
-    items: &'a mut Ivec<Id, Function>,
-    typevec: &'a mut Typevec,
-    names: &'a mut Svec<Istr, Result<BindingId, Id>>,
-    loops: Vec<ExprId>,
+struct Tctx<'a> {
+    id: Id,
+    tara: &'a mut Tara,
+    // modules: &'a Ivec<ModuleId, Module>,
+    // items: &'a mut Ivec<Id, Item>,
+    // locals: &'a mut LocalVec,
+    // types: &'a mut Ivec<TypeId, Typekind>,
 }
-impl Context<'_> {
-    fn new_typevar(&mut self, loc: Provenance) -> Type {
-        new_typevar(self.typevec, &mut self.items[self.func].tvar_count, loc)
+impl BindingCtxT for Tctx<'_> {
+    fn modules(&self) -> &Ivec<ModuleId, Module> {
+        &self.tara.modules
     }
-    fn item(&mut self) -> &mut Function {
-        &mut self.items[self.func]
+    fn types(&mut self) -> &mut Typevec {
+        &mut self.tara.uir_types
     }
+    fn empty_type(&mut self) -> TypeId {
+        let bundle = Type::intern(self.types(), Typekind::Bundle(Rc::new([])));
+        let tup = Type::intern(self.types(), Typekind::Tup);
+        Type::intern(
+            self.types(),
+            Typekind::Call {
+                args: bundle,
+                func: tup,
+            },
+        )
+    }
+    fn no_type(&mut self) -> Option<TypeId> {
+        None
+    }
+    fn locals(&mut self) -> &mut LocalVec {
+        &mut self.tara.uir_locals[self.id]
+    }
+    fn push_name(&mut self, _: Istr, _: BindingId) {}
+}
 
-    fn functions(&mut self, f: &parse::Function) {
-        let bind = self.bindings(&f.args, false);
-        let block = self.expressions(&f.body);
-        let args = {
-            let item = &mut self.items[self.func];
-            Expr {
-                loc: f.args.loc(),
-                typ: item.typ.argument(self.typevec).unwrap(),
-                kind: Exprkind::Arguments,
-            }
-        };
-        let args = self.item().locals.push_expr(args);
-        let bind = Expr {
-            loc: f.args.loc(),
-            typ: Type::unit(self.typevec, f.args.loc()),
-            kind: Exprkind::Let(bind, args),
-        };
-        let bind = self.item().locals.push_expr(bind);
-        let body = Expr {
-            loc: f.args.loc(),
-            typ: self.item().locals[block].typ.clone(),
-            kind: Exprkind::Bareblock(Rc::new([bind, block])),
-        };
-        let body = self.item().locals.push_expr(body);
-        self.item().body = body;
-    }
-
-    fn expressions(&mut self, e: &parse::Expr) -> ExprId {
-        let (typ, kind) = 'switch: {
-            match e.kind {
-                parse::Exprkind::If(ref exprs) => {
-                    let [cond, smash, pass] = exprs.as_ref();
-                    let cond = self.expressions(cond);
-                    let smash = self.expressions(smash);
-                    let pass = self.expressions(pass);
-                    (
-                        self.item().locals[smash].typ.clone(),
-                        Exprkind::If { cond, smash, pass },
-                    )
-                }
-                parse::Exprkind::Call(ref exprs) => {
-                    let [func, args] = exprs.as_ref();
-                    let args = self.expressions(args);
-                    let typ = self.new_typevar(e.loc);
-                    if let parse::Exprkind::Recall(n) = func.kind {
-                        for &b in Builtinkind::VALUES.iter() {
-                            if n == b.spelling().into() {
-                                break 'switch (
-                                    typ,
-                                    Exprkind::Builtin {
-                                        builtin: b,
-                                        loc: func.loc,
-                                        args,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    let func = self.expressions(func);
-                    (typ, Exprkind::Call { func, args })
-                }
-                parse::Exprkind::Tuple(ref exprs) => {
-                    let (types, exprs): (Vec<_>, Vec<_>) = exprs
-                        .iter()
-                        .map(|e| {
-                            let e = self.expressions(e);
-                            (self.item().locals[e].typ.clone(), e)
-                        })
-                        .unzip();
-                    (
-                        Type::tup(self.typevec, &types, e.loc),
-                        Exprkind::Tuple(exprs.into()),
-                    )
-                }
-                parse::Exprkind::Loop(ref expr) => {
-                    // 'reserve' a local slot
-                    let slot = Expr {
-                        loc: e.loc,
-                        typ: Type::unit(self.typevec, e.loc),
-                        kind: Exprkind::default(),
-                    };
-                    let slot = self.item().locals.push_expr(slot);
-                    self.loops.push(slot);
-                    let expr = self.expressions(expr);
-                    self.loops.pop();
-                    let typ = self.new_typevar(e.loc);
-                    let kind = Exprkind::Loop(expr);
-                    self.item().locals[slot] = Expr {
-                        loc: e.loc,
-                        typ,
-                        kind,
-                    };
-                    return slot;
-                }
-                parse::Exprkind::Bareblock(ref exprs) => {
-                    let exprs: Vec<_> = exprs.iter().map(|e| self.expressions(e)).collect();
-                    let typ = exprs
-                        .last()
-                        .map(|&id| self.item().locals[id].typ.clone())
-                        .unwrap_or_else(|| self.new_typevar(e.loc));
-                    (typ, Exprkind::Bareblock(exprs.into()))
-                }
-                parse::Exprkind::Recall(istr) => match self.names.find(&istr) {
-                    Some(&id) => {
-                        let typ = id
-                            .map_err(|e| self.items[e].typ.clone())
-                            .map(|l| self.item().locals[l].typ.clone())
-                            .unwrap_or_else(|e| e);
-                        (typ, Exprkind::Recall(id))
-                    }
-                    _ => {
-                        report(
-                            self.modules,
-                            Message::error("Could not resolve the following name!", Some(e.loc)),
-                            &[],
-                        );
-                        (self.new_typevar(e.loc), Exprkind::Poison)
-                    }
-                },
-                parse::Exprkind::Number(istr) => (
-                    Type::simple(self.typevec, Typekind::Int, e.loc),
-                    Exprkind::Number(istr),
-                ),
-                parse::Exprkind::String(istr) => (
-                    Type::simple(self.typevec, Typekind::String, e.loc),
-                    Exprkind::String(istr),
-                ),
-                parse::Exprkind::Bool(istr) => (
-                    Type::simple(self.typevec, Typekind::Bool, e.loc),
-                    Exprkind::Bool(istr),
-                ),
-                parse::Exprkind::Let(ref binding, ref expr) => {
-                    let binding = self.bindings(binding, false);
-                    let expr = self.expressions(expr);
-                    (
-                        Type::unit(self.typevec, e.loc),
-                        Exprkind::Let(binding, expr),
-                    )
-                }
-                parse::Exprkind::Mut(ref binding, ref expr) => {
-                    let binding = self.bindings(binding, true);
-                    let expr = self.expressions(expr);
-                    (
-                        Type::unit(self.typevec, e.loc),
-                        Exprkind::Let(binding, expr),
-                    )
-                }
-                parse::Exprkind::Assign(istr, ref expr) => {
-                    // TODO: reports here should get at the binding provenance, not the whole expr
-                    match self.names.find(&istr.name) {
-                        Some(Ok(bid)) => {
-                            let bid = *bid;
-                            let expr = self.expressions(expr);
-                            (Type::unit(self.typevec, e.loc), Exprkind::Assign(bid, expr))
-                        }
-                        Some(Err(gid)) => {
-                            report(
-                                self.modules,
-                                Message::error(
-                                    "The following name is not assignable!",
-                                    Some(istr.loc),
-                                ),
-                                // TODO: point to the name instead of the whole item
-                                &[Message::note(
-                                    &format!(
-                                        "'{}' refers to a global item!",
-                                        self.items[*gid].name.name.0
-                                    ),
-                                    Some(self.items[*gid].name.loc),
-                                )],
-                            );
-                            self.expressions(expr);
-                            (Type::unit(self.typevec, e.loc), Exprkind::Poison)
-                        }
-                        None => {
-                            report(
-                                self.modules,
-                                Message::error(
-                                    "Could not resolve the following name!",
-                                    Some(e.loc),
-                                ),
-                                &[],
-                            );
-                            self.expressions(expr);
-                            (Type::unit(self.typevec, e.loc), Exprkind::Poison)
-                        }
-                    }
-                }
-                parse::Exprkind::Break(ref expr) => match self.loops.last() {
-                    Some(&target) => {
-                        let val = if let Some(expr) = expr {
-                            self.expressions(expr)
-                        } else {
-                            let val = Expr {
-                                loc: e.loc,
-                                typ: Type::unit(self.typevec, e.loc),
-                                kind: Exprkind::default(),
-                            };
-                            self.item().locals.push_expr(val)
-                        };
-                        (
-                            Type::unit(self.typevec, e.loc),
-                            Exprkind::Break { val, target },
-                        )
-                    }
-                    None => {
-                        report(
-                            self.modules,
-                            Message::error(
-                                "This break is not contained by any loops!",
-                                Some(e.loc),
-                            ),
-                            &[],
-                        );
-                        (Type::unit(self.typevec, e.loc), Exprkind::Poison)
-                    }
-                },
-                parse::Exprkind::Return(None) => {
-                    let expr = Expr {
-                        loc: e.loc,
-                        typ: Type::unit(self.typevec, e.loc),
-                        kind: Exprkind::default(),
-                    };
-                    let expr = self.item().locals.push_expr(expr);
-                    (Type::unit(self.typevec, e.loc), Exprkind::Return(expr))
-                }
-                parse::Exprkind::Return(Some(ref expr)) => (
-                    Type::unit(self.typevec, e.loc),
-                    Exprkind::Return(self.expressions(expr)),
-                ),
-                parse::Exprkind::Const(ref expr) => (
-                    Type::unit(self.typevec, e.loc),
-                    Exprkind::Const(self.expressions(expr)),
-                ),
-            }
-        };
-        self.item().locals.push_expr(Expr {
-            loc: e.loc,
-            typ,
-            kind,
-        })
-    }
-
-    fn bindings(&mut self, b: &parse::Binding, mutable: bool) -> BindingId {
-        let (name, binding) = match b {
-            parse::Binding::Empty(loc) => (
-                None,
-                Binding {
-                    kind: Bindkind::Empty,
-                    typ: self.new_typevar(*loc),
-                    loc: *loc,
-                },
-            ),
-            parse::Binding::Name(loc, istr, Some(t)) => (
-                Some(*istr),
-                Binding {
-                    kind: Bindkind::Name(*istr, mutable),
-                    typ: self.types(t),
-                    loc: *loc,
-                },
-            ),
-            parse::Binding::Name(loc, istr, None) => (
-                Some(*istr),
-                Binding {
-                    kind: Bindkind::Name(*istr, mutable),
-                    typ: self.new_typevar(*loc),
-                    loc: *loc,
-                },
-            ),
-            parse::Binding::Tuple(loc, bindings) => {
-                let (ts, bs): (Vec<_>, Vec<_>) = bindings
-                    .iter()
-                    .map(|b| {
-                        let b = self.bindings(b, mutable);
-                        (self.item().locals[b].typ.clone(), b)
-                    })
-                    .unzip();
+impl parse::Item {
+    fn interface(&self, locals: Id, tara: &mut Tara) -> (Istr, Interface) {
+        match self {
+            parse::Item::Function(f) => {
+                let name = f.name;
+                let loc = f.loc;
+                let ret = f.ret.convert(&mut tara.uir_types);
+                let arg = f.args.typing(tara);
+                let typ = Type::func(&mut tara.uir_types, arg, ret, loc);
                 (
-                    None,
-                    Binding {
-                        kind: Bindkind::Tuple(bs.into()),
-                        typ: Type::tup(self.typevec, &ts, *loc),
-                        loc: *loc,
-                    },
+                    name.name,
+                    Interface::Function(FunctionInter { loc, typ, name }),
                 )
             }
-        };
-        let bid = self.item().locals.push_binding(binding);
-        if let Some(name) = name {
-            self.names.insert(name, Ok(bid));
+            parse::Item::Typedecl(t) => {
+                let name = t.name;
+                let loc = t.loc;
+                let cases: Vec<_> = t.cases.iter().map(|c| c.convert(locals, tara)).collect();
+                (
+                    name.name,
+                    Interface::Typedecl(TypedeclInter { loc, name, cases }),
+                )
+            }
         }
+    }
+    fn convert(
+        &self,
+        id: Id,
+        names: &mut Svec<Istr, Result<BindingId, Id>>,
+        ctx: &mut Tara,
+    ) -> Item {
+        match self {
+            parse::Item::Function(i) => Item::Function(i.convert(id, names, ctx)),
+            parse::Item::Typedecl(_) => Item::Typedecl(Typedecl {}),
+            // ^ i.convert(
+            //     id,
+            //     &mut Tctx {
+            //         id,
+            //         tara: ctx,
+            //         // modules: &ctx.modules,
+            //         // items: &mut ctx.uir_items,
+            //         // locals: &mut ctx.uir_locals[id],
+            //         // types: &mut ctx.uir_types,
+            //     },
+            // ),
+        }
+    }
+}
+
+impl parse::Typecase {
+    fn convert(&self, locals: Id, tara: &mut Tara) -> Typecase {
+        let binding = self.binding.convert(false, &mut Tctx { id: locals, tara });
+        Typecase {
+            name: self.name,
+            loc: self.loc,
+            binding,
+        }
+    }
+}
+
+impl parse::Function {
+    fn convert(
+        &self,
+        id: Id,
+        names: &mut Svec<Istr, Result<BindingId, Id>>,
+        tara: &mut Tara,
+    ) -> Function {
+        let bind = self.args.convert(
+            false,
+            &mut Ectx {
+                loops: Vec::new(),
+                names,
+                tara,
+                id,
+            },
+        );
+        let block = self.body.convert(&mut Ectx {
+            loops: Vec::new(),
+            names,
+            tara,
+            id,
+            // tvars: &mut tara.uir_tvars,
+            // locals: &mut tara.uir_locals[id],
+            // modules: &tara.modules,
+            // items: &mut tara.uir_items,
+            // types: &mut tara.uir_types,
+        });
+        let args = Expr {
+            loc: self.args.loc,
+            typ: tara.uir_interfaces[id]
+                .into_func()
+                .typ
+                .argument(&tara.uir_types)
+                .unwrap(),
+            kind: Exprkind::Arguments,
+        };
+        let args = tara.push_expr(id, args);
+        let bind = Expr {
+            loc: self.args.loc,
+            typ: Type::unit(&mut tara.uir_types, self.args.loc),
+            kind: Exprkind::Let(bind, args),
+        };
+        let bind = tara.push_expr(id, bind);
+        let body = Expr {
+            loc: self.args.loc,
+            typ: tara.uir_locals[id][block].typ,
+            kind: Exprkind::Bareblock(Rc::new([bind, block])),
+        };
+        let body = tara.uir_locals[id].push_expr(body);
+        Function { body }
+    }
+}
+
+pub struct Ectx<'a> {
+    id: Id,
+    loops: Vec<ExprId>,
+    names: &'a mut Svec<Istr, Result<BindingId, Id>>,
+    tara: &'a mut Tara,
+    // tvars: &'a mut usize,
+    // locals: &'a mut LocalVec,
+    // modules: &'a Ivec<ModuleId, Module>,
+    // items: &'a mut Ivec<Id, Item>,
+    // types: &'a mut Ivec<TypeId, Typekind>,
+}
+impl Ectx<'_> {
+    //     fn function(&mut self, i: Id, loc: Option<Provenance>) -> &mut Function {
+    //         match &mut self.tara.uir_items[i] {
+    //             Item::Function(f) => f,
+    //             Item::Typedecl(t) => {
+    //                 report(
+    //                     &self.modules,
+    //                     Message::error(
+    //                         &format!(
+    //                             "Expected a function, but the name '{}' refers to a type!",
+    //                             t.name.name.0
+    //                         ),
+    //                         loc,
+    //                     ),
+    //                     &[Message::note("Type declared here:", Some(t.loc))],
+    //                 );
+    //                 std::process::exit(1);
+    //             }
+    //         }
+    //     }
+    fn new_typevar(&mut self) -> TypeId {
+        let kind = Typekind::Var(self.tara.uir_tvars);
+        self.tara.uir_tvars += 1;
+        self.tara.uir_types.push(kind)
+    }
+}
+impl Tara {
+    pub fn item_type(&self, i: Id, loc: Option<Provenance>) -> Type {
+        match self.uir_interfaces[i] {
+            Interface::Typedecl(ref t) => {
+                report(
+                    &self.modules,
+                    Message::error(
+                        &format!(
+                            "Expected a function, but the name '{}' refers to a type!",
+                            t.name.name.0
+                        ),
+                        loc,
+                    ),
+                    &[Message::note("Type declared here:", Some(t.loc))],
+                );
+                std::process::exit(1);
+            }
+            Interface::Function(ref f) => f.typ,
+        }
+    }
+}
+impl BindingCtxT for Ectx<'_> {
+    fn empty_type(&mut self) -> TypeId {
+        self.new_typevar()
+    }
+    fn modules(&self) -> &Ivec<ModuleId, Module> {
+        &self.tara.modules
+    }
+    fn types(&mut self) -> &mut Typevec {
+        &mut self.tara.uir_types
+    }
+    fn no_type(&mut self) -> Option<TypeId> {
+        Some(self.new_typevar())
+    }
+    fn locals(&mut self) -> &mut LocalVec {
+        &mut self.tara.uir_locals[self.id]
+    }
+    fn push_name(&mut self, n: Istr, b: BindingId) {
+        self.names.insert(n, Ok(b))
+    }
+}
+
+pub trait BindingCtxT {
+    fn modules(&self) -> &Ivec<ModuleId, Module>;
+    fn types(&mut self) -> &mut Typevec;
+    fn empty_type(&mut self) -> TypeId;
+    fn no_type(&mut self) -> Option<TypeId>;
+    fn locals(&mut self) -> &mut LocalVec;
+    fn push_name(&mut self, _: Istr, _: BindingId);
+}
+
+pub trait BindingT {
+    fn convert(&self, _: Provenance, mutable: bool, _: &mut dyn BindingCtxT) -> BindingId;
+    fn typing(&self, _: Provenance, _: &mut Tara) -> Type;
+}
+
+impl parse::Binding {
+    pub fn convert(&self, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+        self.kind.convert(self.loc, mutable, ctx)
+    }
+    pub fn typing(&self, ctx: &mut Tara) -> Type {
+        self.kind.typing(self.loc, ctx)
+    }
+}
+
+impl BindingT for parse::binding::Empty {
+    fn typing(&self, loc: Provenance, ctx: &mut Tara) -> Type {
+        Type::unit(&mut ctx.uir_types, loc)
+    }
+    fn convert(&self, loc: Provenance, _: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+        let typ = Type {
+            kind: ctx.empty_type(),
+            loc,
+        };
+        ctx.locals().push_binding(Binding {
+            kind: Bindkind::Empty,
+            typ,
+            loc,
+        })
+    }
+}
+
+impl BindingT for parse::binding::Name {
+    fn typing(&self, loc: Provenance, ctx: &mut Tara) -> Type {
+        match self.1 {
+            Some(ref t) => t.convert(&mut ctx.uir_types),
+            None => {
+                report(
+                    &ctx.modules,
+                    Message::error(
+                        "Found an unannotated binding in an invalid context!",
+                        Some(loc),
+                    ),
+                    &[Message::note("Add a type annotation!", None)],
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+    fn convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+        let typ = match self.1 {
+            Some(ref t) => t.convert(ctx.types()),
+            None => match ctx.no_type() {
+                Some(kind) => Type { kind, loc },
+                None => {
+                    report(
+                        ctx.modules(),
+                        Message::error(
+                            "Found an unannotated binding in an invalid context!",
+                            Some(loc),
+                        ),
+                        &[Message::note("Add a type annotation!", None)],
+                    );
+                    std::process::exit(1);
+                }
+            },
+        };
+        let bid = ctx.locals().push_binding(Binding {
+            kind: Bindkind::Name(self.0, mutable),
+            typ,
+            loc,
+        });
+        ctx.push_name(self.0, bid);
         bid
     }
+}
 
-    fn types(&mut self, t: &parse::Type) -> Type {
-        types(self.typevec, t)
+impl BindingT for parse::binding::Tuple {
+    fn typing(&self, loc: Provenance, ctx: &mut Tara) -> Type {
+        let ts: Vec<_> = self.0.iter().map(|b| b.typing(ctx)).collect();
+        Type::tup(&mut ctx.uir_types, &ts, loc)
+    }
+    fn convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+        let (ts, bs): (Vec<_>, Vec<_>) = self
+            .0
+            .iter()
+            .map(|b| {
+                let b = b.convert(mutable, ctx);
+                (ctx.locals()[b].typ, b)
+            })
+            .unzip();
+        let typ = Type::tup(ctx.types(), &ts, loc);
+        ctx.locals().push_binding(Binding {
+            kind: Bindkind::Tuple(bs.into()),
+            typ,
+            loc,
+        })
     }
 }
 
-fn binding_type(typevec: &mut Typevec, counter: &mut usize, b: &parse::Binding) -> Type {
-    match b {
-        parse::Binding::Empty(loc) => Type::unit(typevec, *loc),
-        parse::Binding::Name(_, _, Some(t)) => types(typevec, t),
-        parse::Binding::Name(loc, _, None) => new_typevar(typevec, counter, *loc),
-        parse::Binding::Tuple(loc, bindings) => {
-            let fields: Vec<_> = bindings
-                .iter()
-                .map(|b| binding_type(typevec, counter, b))
-                .collect();
-            Type::tup(typevec, &fields, *loc)
+pub trait ExprT {
+    fn convert(&self, _: Provenance, _: &mut Ectx) -> ExprId;
+}
+
+impl parse::Expr {
+    pub fn convert(&self, ctx: &mut Ectx) -> ExprId {
+        self.kind.convert(self.loc, ctx)
+    }
+}
+
+impl ExprT for parse::expr::If {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let cond = self.cond.convert(ctx);
+        let smash = self.smash.convert(ctx);
+        let pass = self.pass.convert(ctx);
+        let typ = ctx.locals()[smash].typ;
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::If { cond, smash, pass },
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Call {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        // if func = recall(builtin) { func = builtin::...; }
+        let func = self.func.convert(ctx);
+        let args = self.args.convert(ctx);
+        let typ = Type {
+            kind: ctx.new_typevar(),
+            loc,
+        };
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Call { func, args },
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Tuple {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let (types, exprs): (Vec<_>, Vec<_>) = self
+            .0
+            .iter()
+            .map(|e| {
+                let e = e.convert(ctx);
+                (ctx.locals()[e].typ, e)
+            })
+            .unzip();
+        let typ = Type::tup(&mut ctx.tara.uir_types, &types, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Tuple(exprs.into()),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Loop {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let slot = Expr {
+            typ: Type::unit(&mut ctx.tara.uir_types, loc),
+            kind: Exprkind::default(),
+            loc,
+        };
+        let slot = ctx.locals().push_expr(slot);
+        ctx.loops.push(slot);
+        let expr = self.0.convert(ctx);
+        ctx.loops.pop();
+        let typ = Type {
+            kind: ctx.new_typevar(),
+            loc,
+        };
+        ctx.locals()[slot] = Expr {
+            kind: Exprkind::Loop(expr),
+            typ,
+            loc,
+        };
+        slot
+    }
+}
+
+impl ExprT for parse::expr::Bareblock {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let exprs: Vec<_> = self.0.iter().map(|e| e.convert(ctx)).collect();
+        let typ = exprs
+            .last()
+            .map(|&id| ctx.locals()[id].typ)
+            .unwrap_or_else(|| Type {
+                kind: ctx.new_typevar(),
+                loc,
+            });
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Bareblock(exprs.into()),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Recall {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        for &builtin in Builtinkind::VALUES {
+            if builtin.spelling() == self.0 .0 {
+                let typ = Type {
+                    kind: ctx.new_typevar(),
+                    loc,
+                };
+                return ctx.locals().push_expr(Expr {
+                    kind: Exprkind::Builtin(builtin),
+                    typ,
+                    loc,
+                });
+            }
+        }
+        match ctx.names.find(&self.0) {
+            Some(&id) => {
+                let typ = id
+                    .map_err(|e| ctx.tara.item_type(e, Some(loc)))
+                    .map(|l| ctx.locals()[l].typ)
+                    .unwrap_or_else(|e| e);
+                ctx.locals().push_expr(Expr {
+                    kind: Exprkind::Recall(id),
+                    typ,
+                    loc,
+                })
+            }
+            None => {
+                report(
+                    &ctx.tara.modules,
+                    Message::error("Could not resolve the following name!", Some(loc)),
+                    &[],
+                );
+                let typ = Type {
+                    kind: ctx.new_typevar(),
+                    loc,
+                };
+                ctx.locals().push_expr(Expr {
+                    kind: Exprkind::Poison,
+                    typ,
+                    loc,
+                })
+            }
         }
     }
 }
 
-fn new_typevar(typevec: &mut Typevec, counter: &mut usize, loc: Provenance) -> Type {
-    let kind = Typekind::Var(*counter);
-    *counter += 1;
-    Type::simple(typevec, kind, loc)
+impl ExprT for parse::expr::Number {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::Int, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Number(self.0),
+            typ,
+            loc,
+        })
+    }
 }
 
-fn types(typevec: &mut Typevec, t: &parse::Type) -> Type {
-    match &t.kind {
-        parse::Typekind::Func { args, ret } => {
-            let args = types(typevec, args);
-            let ret = types(typevec, ret);
-            Type::func(typevec, &args, &ret, t.loc)
-        }
-        parse::Typekind::Call { args, func } => {
-            let func = types(typevec, func);
-            let args = types(typevec, args);
-            Type::call(typevec, &func, &args, t.loc)
-        }
-        parse::Typekind::Bundle(items) => {
-            let items: Vec<_> = items.iter().map(|t| types(typevec, t)).collect();
-            Type::bundle(typevec, &items, t.loc)
-        }
-        parse::Typekind::Recall(istr) => {
-            let kind = match *istr {
-                s if s == "int".into() => Typekind::Int,
-                s if s == "string".into() => Typekind::String,
-                s if s == "bool".into() => Typekind::Bool,
-                s if s == "tuple".into() => Typekind::Tup,
-                s => Typekind::Recall(s),
-            };
-            Type::simple(typevec, kind, t.loc)
+impl ExprT for parse::expr::String {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::String, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::String(self.0),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Bool {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::Bool, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Bool(self.0),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Let {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let binding = self.0.convert(false, ctx);
+        let expr = self.1.convert(ctx);
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Let(binding, expr),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Mut {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let binding = self.0.convert(true, ctx);
+        let expr = self.1.convert(ctx);
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        ctx.locals().push_expr(Expr {
+            kind: Exprkind::Let(binding, expr),
+            typ,
+            loc,
+        })
+    }
+}
+
+impl ExprT for parse::expr::Assign {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        let kind = match ctx.names.find(&self.0.name) {
+            Some(Ok(bid)) => {
+                let bid = *bid;
+                let expr = self.1.convert(ctx);
+                Exprkind::Assign(bid, expr)
+            }
+            Some(Err(gid)) => {
+                report(
+                    &ctx.tara.modules,
+                    Message::error("The following name is not assignable!", Some(loc)),
+                    &[Message::note(
+                        &format!(
+                            "'{}' refers to a global item!",
+                            ctx.tara.item_name(*gid).name.0,
+                        ),
+                        Some(ctx.tara.item_name(*gid).loc),
+                    )],
+                );
+                self.1.convert(ctx);
+                Exprkind::Poison
+            }
+            None => {
+                report(
+                    &ctx.tara.modules,
+                    Message::error("Could not resolve the following name!", Some(loc)),
+                    &[],
+                );
+                self.1.convert(ctx);
+                Exprkind::Poison
+            }
+        };
+        ctx.locals().push_expr(Expr { kind, typ, loc })
+    }
+}
+
+impl ExprT for parse::expr::Break {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        let kind = match ctx.loops.last() {
+            Some(&target) => {
+                let val = if let Some(ref expr) = self.0 {
+                    expr.convert(ctx)
+                } else {
+                    let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+                    ctx.locals().push_expr(Expr {
+                        kind: Exprkind::default(),
+                        typ,
+                        loc,
+                    })
+                };
+                Exprkind::Break { val, target }
+            }
+            None => {
+                report(
+                    &ctx.tara.modules,
+                    Message::error("This break is not contained by any loops!", Some(loc)),
+                    &[],
+                );
+                Exprkind::Poison
+            }
+        };
+        ctx.locals().push_expr(Expr { kind, typ, loc })
+    }
+}
+
+impl ExprT for parse::expr::Return {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        let kind = match self.0 {
+            None => Exprkind::default(),
+            Some(ref expr) => Exprkind::Return(expr.convert(ctx)),
+        };
+        ctx.locals().push_expr(Expr { kind, typ, loc })
+    }
+}
+
+impl ExprT for parse::expr::Const {
+    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+        let typ = Type::unit(&mut ctx.tara.uir_types, loc);
+        let kind = Exprkind::Const(self.0.convert(ctx));
+        ctx.locals().push_expr(Expr { kind, typ, loc })
+    }
+}
+
+impl parse::Type {
+    fn convert(&self, typevec: &mut Typevec) -> Type {
+        match &self.kind {
+            parse::Typekind::Func { args, ret } => {
+                let args = args.convert(typevec);
+                let ret = ret.convert(typevec);
+                Type::func(typevec, args, ret, self.loc)
+            }
+            parse::Typekind::Call { args, func } => {
+                let func = func.convert(typevec);
+                let args = args.convert(typevec);
+                Type::call(typevec, func, args, self.loc)
+            }
+            parse::Typekind::Bundle(items) => {
+                let items: Vec<_> = items.iter().map(|t| t.convert(typevec)).collect();
+                Type::bundle(typevec, &items, self.loc)
+            }
+            parse::Typekind::Recall(istr) => {
+                let kind = match *istr {
+                    s if s == "int".into() => Typekind::Int,
+                    s if s == "string".into() => Typekind::String,
+                    s if s == "bool".into() => Typekind::Bool,
+                    s if s == "tuple".into() => Typekind::Tup,
+                    s => Typekind::Recall(s),
+                };
+                Type::simple(typevec, kind, self.loc)
+            }
         }
     }
 }

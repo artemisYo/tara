@@ -6,22 +6,25 @@ pub mod prescan;
 pub mod typer;
 pub mod uir;
 
-use crate::{
-    ansi::Style,
-    misc::{Indexer, Ivec},
-    report_simple, MkIndexer, Provenance,
-};
+use crate::misc::Indexer;
+use crate::{report, Message};
+use crate::{ansi::Style, misc::Ivec, report_simple, MkIndexer, Provenance};
 use std::{
     collections::{BTreeMap as Map, BTreeSet as Set},
     path::PathBuf,
 };
 
 pub struct Tara {
+    // stores
     pub entry: ModuleId,
     pub modules: Ivec<ModuleId, Module>,
-    pub uir_items: Ivec<uir::Id, uir::Function>,
+    pub uir_items: Ivec<uir::Id, uir::Item>,
+    pub uir_interfaces: Ivec<uir::Id, uir::Interface>,
+    pub uir_locals: Ivec<uir::Id, uir::LocalVec>,
     pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
+    uir_tvars: usize,
     pub llvm_mod: inkwell::module::Module<'static>,
+    // passes
     codegen: Map<codegen::In, Option<codegen::Out>>,
     fills: Set<fill::In>,
     typecheck: Map<typer::In, Option<typer::Out>>,
@@ -30,7 +33,32 @@ pub struct Tara {
     prescans: Map<prescan::In, Option<prescan::Out>>,
     preimports: Map<preimport::In, Option<preimport::Out>>,
 }
+impl<I: Into<uir::Id>> std::ops::Index<(I, uir::ExprId)> for Tara {
+    type Output = uir::Expr;
+    fn index(&self, (i, e): (I, uir::ExprId)) -> &Self::Output {
+        &self.uir_locals[i.into()][e]
+    }
+}
+impl<I: Into<uir::Id>> std::ops::Index<(I, uir::BindingId)> for Tara {
+    type Output = uir::Binding;
+    fn index(&self, (i, e): (I, uir::BindingId)) -> &Self::Output {
+        &self.uir_locals[i.into()][e]
+    }
+}
+
 impl Tara {
+    #[inline]
+    pub fn report(&self, head: Message, extra: &[Message]) {
+        report(&self.modules, head, extra);
+    }
+    #[inline]
+    pub fn unit(&mut self, loc: Provenance) -> uir::Type {
+        uir::Type::unit(&mut self.uir_types, loc)
+    }
+    #[inline]
+    pub fn item_name<I: Into<uir::Id>>(&self, i: I) -> parse::Ident {
+        self.uir_interfaces[i.into()].name()
+    }
     pub fn from(main: &str) -> Self {
         let mut modules = Ivec::default();
         let top = modules.promise();
@@ -56,6 +84,9 @@ impl Tara {
             fills: Default::default(),
             uir_items: Default::default(),
             uir_types: Default::default(),
+            uir_locals: Default::default(),
+            uir_interfaces: Default::default(),
+            uir_tvars: 0,
             typecheck: Default::default(),
             resolution: Default::default(),
             parses: Default::default(),
@@ -106,7 +137,7 @@ impl Tara {
     pub fn get_lexer(&self, m: ModuleId) -> crate::lexer::Lexer<'static> {
         crate::lexer::Lexer::new(m, self.get_source(m))
     }
-    pub fn get_uir(&self, u: uir::Id) -> &uir::Function {
+    pub fn get_uir(&self, u: uir::Id) -> &uir::Item {
         &self.uir_items[u]
     }
     pub fn eof_loc(&self, m: ModuleId) -> Provenance {

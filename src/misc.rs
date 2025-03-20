@@ -6,12 +6,24 @@ pub struct Svec<K, V> {
     vals: Vec<V>,
 }
 impl<K: Eq, V> Svec<K, V> {
+    #[inline]
+    pub fn excursion<O>(&mut self, f: impl FnOnce(&mut Self) -> O) -> O {
+        let start = self.len();
+        let out = f(self);
+        self.truncate(start);
+        out
+    }
     pub fn insert(&mut self, k: K, v: V) {
         self.keys.push(k);
         self.vals.push(v);
     }
     pub fn find(&self, k: &K) -> Option<&V> {
-        self.keys.iter().enumerate().rev().find(|(_, c)| &k == c).map(|(i, _)| &self.vals[i])
+        self.keys
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, c)| &k == c)
+            .map(|(i, _)| &self.vals[i])
     }
     pub fn len(&self) -> usize {
         self.keys.len()
@@ -41,6 +53,13 @@ impl<I: Indexer, T> Ivec<I, T> {
         self.inner.push(value);
         index
     }
+    pub fn register(&mut self, value: T, id: I) -> Result<(), ()> {
+        if I::from(self.inner.len()) != id {
+            return Err(());
+        }
+        self.inner.push(value);
+        Ok(())
+    }
     // pub fn push_range(&mut self, values: impl Iterator<Item = T>) -> (I, I) {
     //     let start = I::from(self.inner.len());
     //     self.inner.extend(values);
@@ -60,7 +79,7 @@ impl<I, T> Default for Ivec<I, T> {
     }
 }
 
-pub trait Indexer: From<usize> + Into<usize> {}
+pub trait Indexer: From<usize> + Into<usize> + Eq {}
 impl<I: Indexer, T> std::ops::Index<I> for Ivec<I, T> {
     type Output = T;
 

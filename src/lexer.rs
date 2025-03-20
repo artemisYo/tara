@@ -122,6 +122,7 @@ impl<'src> Lexer<'src> {
     fn keywords(&mut self) -> Option<Token<&'src str>> {
         use Tokenkind::*;
         const TABLE: &[(&[u8], Tokenkind)] = &[
+            Lexer::mk_tk(Case),
             Lexer::mk_tk(Func),
             Lexer::mk_tk(Return),
             Lexer::mk_tk(Loop),

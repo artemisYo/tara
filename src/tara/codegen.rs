@@ -14,13 +14,14 @@ use crate::{
 };
 
 use super::{
-    uir::{self, ExprId, LocalVec},
+    uir::{self, ExprId, FuncId},
     Tara,
 };
 
 #[derive(Clone)]
-pub struct Out {
-    pub func: FunctionValue<'static>,
+pub enum Out {
+    Typedecl(),
+    Func(FunctionValue<'static>),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -45,21 +46,29 @@ impl Tara {
 
 #[derive(PartialEq, Eq)]
 enum Control {
-    Plain(AnyValueEnum<'static>),
     Break,
     Return,
 }
 
+type Result = std::result::Result<AnyValueEnum<'static>, Control>;
+
 fn codegen(tara: &mut Tara, i: In) -> Out {
     tara.fill(fill::In { i: i.i });
-    let ty = tara.uir_types[tara.uir_items[i.i].typ.kind].clone();
+    match tara.uir_items[i.i] {
+        uir::Item::Typedecl(_) => Out::Typedecl(),
+        uir::Item::Function(_) => functions(i.i.into_func(), tara),
+    }
+}
+
+fn functions(f: FuncId, tara: &mut Tara) -> Out {
+    let ty = tara.uir_types[tara.uir_interfaces[f].typ.kind].clone();
     let llvm_ctx = tara.llvm_mod.get_context();
     let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, &tara.uir_types, llvm_ctx) else {
         panic!("non-function typed functions??")
     };
     let val = tara
         .llvm_mod
-        .add_function(tara.uir_items[i.i].name.name.0, ty, None);
+        .add_function(tara.item_name(f).name.0, ty, None);
     let entry = llvm_ctx.append_basic_block(val, "entry");
     let ret_b = llvm_ctx.append_basic_block(val, "return");
     let builder = llvm_ctx.create_builder();
@@ -71,7 +80,7 @@ fn codegen(tara: &mut Tara, i: In) -> Out {
         lets: Default::default(),
         loops: Vec::new(),
         ctx: llvm_ctx,
-        id: i.i,
+        id: f,
         builder,
         ret_v,
         ret_b,
@@ -79,9 +88,9 @@ fn codegen(tara: &mut Tara, i: In) -> Out {
         val,
     };
     match ctx.expressions(ctx.tara.uir_items[ctx.id].body) {
-        Control::Return => {}
-        Control::Break => panic!("breaks in plain bareblock shouldn't happen"),
-        Control::Plain(body) => {
+        Err(Control::Return) => {}
+        Err(Control::Break) => panic!("breaks in plain bareblock shouldn't happen"),
+        Ok(body) => {
             let body = any_to_basic_value(body);
             ctx.builder.build_store(ctx.ret_v, body).unwrap();
             ctx.builder.build_unconditional_branch(ctx.ret_b).unwrap();
@@ -93,7 +102,7 @@ fn codegen(tara: &mut Tara, i: In) -> Out {
         .build_load(ty.get_return_type().unwrap(), ctx.ret_v, "*return_slot")
         .unwrap();
     ctx.builder.build_return(Some(&ret_v)).unwrap();
-    Out { func: val }
+    Out::Func(val)
 }
 
 fn any_to_basic_type(t: AnyTypeEnum<'static>, ctx: ContextRef<'static>) -> BasicTypeEnum<'static> {
@@ -187,7 +196,7 @@ struct Context<'a> {
     ctx: ContextRef<'static>,
     val: FunctionValue<'static>,
     lets: Map<Istr, (BasicTypeEnum<'static>, PointerValue<'static>)>,
-    id: uir::Id,
+    id: FuncId,
     ret_v: PointerValue<'static>,
     ret_b: BasicBlock<'static>,
     loops: Vec<(BasicBlock<'static>, PointerValue<'static>)>,
@@ -195,16 +204,12 @@ struct Context<'a> {
 }
 
 impl Context<'_> {
-    fn locals(&self) -> &LocalVec {
-        &self.tara.uir_items[self.id].locals
-    }
-    fn expressions(&mut self, e: ExprId) -> Control {
-        match self.locals()[e].kind {
+    fn expressions(&mut self, e: ExprId) -> Result {
+        match self.tara[(self.id, e)].kind {
             uir::Exprkind::If { cond, smash, pass } => {
-                let cond = match self.expressions(cond) {
-                    Control::Plain(AnyValueEnum::IntValue(c)) => c,
-                    Control::Plain(_) => panic!("typechecker should've caught this"),
-                    e => return e,
+                let cond = match self.expressions(cond)? {
+                    AnyValueEnum::IntValue(c) => c,
+                    _ => panic!("typechecker should've caught this"),
                 };
                 let smash_b = self.ctx.append_basic_block(self.val, "smash");
                 let pass_b = self.ctx.append_basic_block(self.val, "pass");
@@ -216,13 +221,13 @@ impl Context<'_> {
 
                 self.builder.position_at_end(smash_b);
                 let smash_v = self.expressions(smash);
-                if let Control::Plain(_) = &smash_v {
+                if smash_v.is_ok() {
                     self.builder.build_unconditional_branch(post_b).unwrap();
                     cont = true;
                 }
                 self.builder.position_at_end(pass_b);
                 let pass_v = self.expressions(pass);
-                if let Control::Plain(_) = &pass_v {
+                if pass_v.is_ok() {
                     self.builder.build_unconditional_branch(post_b).unwrap();
                     cont = true;
                 }
@@ -230,27 +235,27 @@ impl Context<'_> {
                 self.builder.position_at_end(post_b);
                 if !cont {
                     self.builder.build_unreachable().unwrap();
-                    if Control::Break == smash_v {
-                        return Control::Break;
+                    if Err(Control::Break) == smash_v {
+                        return smash_v;
                     }
-                    if let Control::Break = &pass_v {
+                    if let Err(Control::Break) = pass_v {
                         return pass_v;
                     }
                     return smash_v;
                 }
 
                 let (l, p, q) = match (smash_v, pass_v) {
-                    (Control::Plain(p), Control::Plain(q)) => (
+                    (Ok(p), Ok(q)) => (
                         2,
                         (any_to_basic_value(p), smash_b),
                         (any_to_basic_value(q), pass_b),
                     ),
-                    (Control::Plain(p), _) => (
+                    (Ok(p), _) => (
                         1,
                         (any_to_basic_value(p), smash_b),
                         (self.ctx.const_struct(&[], false).into(), pass_b),
                     ),
-                    (_, Control::Plain(p)) => (
+                    (_, Ok(p)) => (
                         1,
                         (any_to_basic_value(p), pass_b),
                         (self.ctx.const_struct(&[], false).into(), smash_b),
@@ -268,28 +273,30 @@ impl Context<'_> {
                     .build_phi(p.0.get_type(), "merge_branches")
                     .unwrap();
                 phi_v.add_incoming(incoming);
-                Control::Plain(phi_v.into())
+                Ok(phi_v.into())
             }
             uir::Exprkind::Call { func, args } => {
-                let func_v = match self.expressions(func) {
-                    Control::Plain(AnyValueEnum::FunctionValue(v)) => v,
-                    Control::Plain(_) => panic!("help me"),
-                    e => return e,
-                };
-                let args = match self.expressions(args) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
-                let res = self
-                    .builder
-                    .build_call(func_v, &[any_to_basic_value(args).into()], "call")
-                    .unwrap();
-                Control::Plain(res.as_any_value_enum())
+                if let uir::Exprkind::Builtin(b) = self.tara[(self.id, func)].kind {
+                    self.builtins(b, args)
+                } else {
+                    let func_v = match self.expressions(func)? {
+                        AnyValueEnum::FunctionValue(v) => v,
+                        _ => panic!("help me"),
+                    };
+                    let args = self.expressions(args)?;
+                    let res = self
+                        .builder
+                        .build_call(func_v, &[any_to_basic_value(args).into()], "call")
+                        .unwrap();
+                    Ok(res.as_any_value_enum())
+                }
             }
-            uir::Exprkind::Builtin { builtin, args, .. } => self.builtins(builtin, args),
+            uir::Exprkind::Builtin(_) => {
+                panic!("builtins shouldn't be used for anything other than calls")
+            }
             uir::Exprkind::Tuple(ref expr_ids) => {
                 let expr_ids = expr_ids.clone();
-                let ty = self.tara.uir_types[self.locals()[e].typ.kind].clone();
+                let ty = self.tara.uir_types[self.tara[(self.id, e)].typ.kind].clone();
                 let AnyTypeEnum::StructType(ty) =
                     lower_type(ty, None, &self.tara.uir_types, self.ctx)
                 else {
@@ -297,19 +304,16 @@ impl Context<'_> {
                 };
                 let mut comma = ty.get_undef().into();
                 for (ix, &id) in expr_ids.iter().enumerate() {
-                    let v = match self.expressions(id) {
-                        Control::Plain(v) => any_to_basic_value(v),
-                        e => return e,
-                    };
+                    let v = any_to_basic_value(self.expressions(id)?);
                     comma = self
                         .builder
                         .build_insert_value(comma, v, ix as u32, "tuple")
                         .unwrap();
                 }
-                Control::Plain(comma.as_any_value_enum())
+                Ok(comma.as_any_value_enum())
             }
             uir::Exprkind::Loop(expr_id) => {
-                let ty = self.locals()[e].typ.kind;
+                let ty = self.tara[(self.id, e)].typ.kind;
                 let ty = self.tara.uir_types[ty].clone();
                 let ty = lower_type(ty, None, &self.tara.uir_types, self.ctx);
                 let ty = any_to_basic_type(ty, self.ctx);
@@ -320,43 +324,43 @@ impl Context<'_> {
                 self.builder.build_unconditional_branch(loop_b).unwrap();
                 self.builder.position_at_end(loop_b);
                 let v = self.expressions(expr_id);
-                if Control::Return == v {
-                    return Control::Return;
+                if Err(Control::Return) == v {
+                    return v;
                 }
-                if let Control::Plain(_) = &v {
+                if v.is_ok() {
                     self.builder.build_unconditional_branch(loop_b).unwrap();
                 }
                 self.builder.position_at_end(post_b);
                 self.loops.pop();
                 let v = self.builder.build_load(ty, post_v, "*loop_slot").unwrap();
-                Control::Plain(v.into())
+                Ok(v.into())
             }
             uir::Exprkind::Bareblock(ref expr_ids) => {
                 let mut out = self.ctx.const_struct(&[], false).into();
                 let expr_ids = expr_ids.clone();
                 for &id in expr_ids.iter() {
-                    match self.expressions(id) {
-                        Control::Plain(v) => out = v,
-                        e => return e,
-                    }
+                    out = self.expressions(id)?;
                 }
-                Control::Plain(out)
+                Ok(out)
             }
             // name resolution done before the typer is useless now
             // as the data we need is not a field in the struct
             uir::Exprkind::Recall(Ok(l)) => {
-                let uir::Bindkind::Name(n, _) = self.locals()[l].kind else {
+                let uir::Bindkind::Name(n, _) = self.tara[(self.id, l)].kind else {
                     panic!("I have no idea")
                 };
                 let (ty, ptr) = self.lets.get(&n).copied().unwrap();
                 let out = self.builder.build_load(ty, ptr, "recall_local").unwrap();
-                Control::Plain(out.into())
+                Ok(out.into())
             }
             // 'cycles' like /this/ are fine, the value exists already
-            uir::Exprkind::Recall(Err(g)) => Control::Plain(if self.id == g {
+            uir::Exprkind::Recall(Err(g)) => Ok(if g == self.id.into() {
                 self.val.into()
             } else {
-                self.tara.codegen(In { i: g }).func.into()
+                let Out::Func(f) = self.tara.codegen(In { i: g }) else {
+                    panic!("huh?");
+                };
+                f.into()
             }),
 
             uir::Exprkind::Number(istr) => {
@@ -365,82 +369,67 @@ impl Context<'_> {
                     .custom_width_int_type(64)
                     .const_int_from_string(istr.0, StringRadix::Decimal)
                     .unwrap();
-                Control::Plain(v.into())
+                Ok(v.into())
             }
             uir::Exprkind::String(istr) => {
                 let global = self
                     .builder
                     .build_global_string_ptr(istr.0, "string_literal")
                     .unwrap();
-                Control::Plain(global.as_pointer_value().into())
+                Ok(global.as_pointer_value().into())
             }
             uir::Exprkind::Bool(istr) => {
                 let v = if istr == "true".into() { 1 } else { 0 };
                 let v = self.ctx.custom_width_int_type(1).const_int(v, false);
-                Control::Plain(v.into())
+                Ok(v.into())
             }
-            uir::Exprkind::Arguments => Control::Plain(self.val.get_nth_param(0).unwrap().into()),
+            uir::Exprkind::Arguments => Ok(self.val.get_nth_param(0).unwrap().into()),
             uir::Exprkind::Poison => {
                 panic!("Poison should've barred codegen from running earlier on!")
             }
             uir::Exprkind::Let(binding_id, expr_id) => {
-                let v = match self.expressions(expr_id) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
+                let v = self.expressions(expr_id)?;
                 let v = any_to_basic_value(v);
                 self.bindings(binding_id, v);
-                Control::Plain(self.ctx.const_struct(&[], false).into())
+                Ok(self.ctx.const_struct(&[], false).into())
             }
             uir::Exprkind::Assign(l, expr_id) => {
-                let uir::Bindkind::Name(n, _) = self.locals()[l].kind else {
+                let uir::Bindkind::Name(n, _) = self.tara[(self.id, l)].kind else {
                     panic!("I have no idea")
                 };
-                let v = match self.expressions(expr_id) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
+                let v = self.expressions(expr_id)?;
                 let (_, ptr) = self.lets.get(&n).unwrap();
                 self.builder
                     .build_store(*ptr, any_to_basic_value(v))
                     .unwrap();
-                Control::Plain(self.ctx.const_struct(&[], false).into())
+                Ok(self.ctx.const_struct(&[], false).into())
             }
             uir::Exprkind::Break { val, target: _ } => {
-                let v = match self.expressions(val) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
+                let v = self.expressions(val)?;
                 let (block, ptr) = self.loops.last().unwrap();
                 self.builder
                     .build_store(*ptr, any_to_basic_value(v))
                     .unwrap();
                 self.builder.build_unconditional_branch(*block).unwrap();
-                Control::Break
+                Err(Control::Break)
             }
             uir::Exprkind::Return(expr_id) => {
-                let v = match self.expressions(expr_id) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
+                let v = self.expressions(expr_id)?;
                 self.builder
                     .build_store(self.ret_v, any_to_basic_value(v))
                     .unwrap();
                 self.builder.build_unconditional_branch(self.ret_b).unwrap();
-                Control::Return
+                Err(Control::Return)
             }
             uir::Exprkind::Const(expr_id) => {
-                match self.expressions(expr_id) {
-                    Control::Plain(_) => {}
-                    e => return e,
-                }
-                Control::Plain(self.ctx.const_struct(&[], false).into())
+                self.expressions(expr_id)?;
+                Ok(self.ctx.const_struct(&[], false).into())
             }
         }
     }
 
     fn bindings(&mut self, b: uir::BindingId, v: BasicValueEnum<'static>) {
-        match self.locals()[b].kind {
+        match self.tara[(self.id, b)].kind {
             uir::Bindkind::Empty => {}
             uir::Bindkind::Name(istr, _) => {
                 let ty = v.get_type();
@@ -464,29 +453,23 @@ impl Context<'_> {
         }
     }
 
-    fn builtins(&mut self, b: uir::Builtinkind, a: uir::ExprId) -> Control {
+    fn builtins(&mut self, b: uir::Builtinkind, a: uir::ExprId) -> Result {
         let mut args = Vec::with_capacity(7);
-        match self.locals()[a].kind {
+        match self.tara[(self.id, a)].kind {
             uir::Exprkind::Tuple(ref fields) => {
                 for &f in fields.clone().iter() {
-                    let f = match self.expressions(f) {
-                        Control::Plain(v) => v,
-                        e => return e,
-                    };
+                    let f = self.expressions(f)?;
                     args.push(f);
                 }
             }
             _ => {
-                let a = match self.expressions(a) {
-                    Control::Plain(v) => v,
-                    e => return e,
-                };
+                let a = self.expressions(a)?;
                 args.push(a);
             }
         }
 
         let name = b.spelling();
-        Control::Plain(match b {
+        Ok(match b {
             uir::Builtinkind::Add => self
                 .builder
                 .build_int_add(args[0].into_int_value(), args[1].into_int_value(), name)
@@ -641,15 +624,20 @@ impl Context<'_> {
                     false,
                 );
                 self.builder
-                    .build_indirect_call(asm_t, asm_v, &[
-                        args[0].into_int_value().into(),
-                        args[1].into_int_value().into(),
-                        args[2].into_int_value().into(),
-                        args[3].into_int_value().into(),
-                        args[4].into_int_value().into(),
-                        args[5].into_int_value().into(),
-                        args[6].into_int_value().into(),
-                    ], name)
+                    .build_indirect_call(
+                        asm_t,
+                        asm_v,
+                        &[
+                            args[0].into_int_value().into(),
+                            args[1].into_int_value().into(),
+                            args[2].into_int_value().into(),
+                            args[3].into_int_value().into(),
+                            args[4].into_int_value().into(),
+                            args[5].into_int_value().into(),
+                            args[6].into_int_value().into(),
+                        ],
+                        name,
+                    )
                     .unwrap()
                     .as_any_value_enum()
             }

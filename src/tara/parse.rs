@@ -8,7 +8,7 @@ use crate::{
     Message, Provenance,
 };
 
-use super::{prescan::Opdef, ModuleId, Tara};
+use super::{prescan::Opdef, uir, ModuleId, Tara};
 
 #[derive(Clone)]
 pub struct Out {
@@ -38,7 +38,12 @@ impl Tara {
 }
 
 pub struct Ast {
-    pub funcs: Vec<Function>,
+    pub items: Vec<Item>,
+}
+
+pub enum Item {
+    Function(Function),
+    Typedecl(Typedecl),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,13 +52,24 @@ pub struct Ident {
     pub loc: Provenance,
 }
 
-#[derive(Debug)]
 pub struct Function {
     pub loc: Provenance,
     pub name: Ident,
     pub ret: Type,
     pub args: Binding,
     pub body: Expr,
+}
+
+pub struct Typedecl {
+    pub loc: Provenance,
+    pub name: Ident,
+    pub cases: Vec<Typecase>,
+}
+
+pub struct Typecase {
+    pub loc: Provenance,
+    pub name: Ident,
+    pub binding: Binding,
 }
 
 #[derive(Clone, Debug)]
@@ -91,50 +107,52 @@ impl Default for Typekind {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Binding {
-    Empty(Provenance),
-    Name(Provenance, Istr, Option<Type>),
-    Tuple(Provenance, Vec<Binding>),
-}
-impl Binding {
-    pub fn loc(&self) -> Provenance {
-        *match self {
-            Binding::Empty(p) => p,
-            Binding::Name(p, _, _) => p,
-            Binding::Tuple(p, _) => p,
-        }
-    }
+pub struct Binding {
+    pub loc: Provenance,
+    pub kind: Box<dyn uir::BindingT>,
 }
 
-#[derive(Clone, Debug)]
+pub mod binding {
+    use super::*;
+    pub struct Empty;
+    pub struct Name(pub Istr, pub Option<Type>);
+    pub struct Tuple(pub Vec<Binding>);
+}
+
+#[derive(Clone)]
 pub struct Expr {
     pub loc: Provenance,
-    pub kind: Exprkind,
+    pub kind: Rc<dyn uir::ExprT>,
 }
-#[derive(Clone, Debug)]
-pub enum Exprkind {
-    If(Box<[Expr; 3]>),
-    Call(Box<[Expr; 2]>),
-    Tuple(Vec<Expr>),
-    Loop(Box<Expr>),
-    Bareblock(Vec<Expr>),
-    Recall(Istr),
-    Number(Istr),
-    String(Istr),
-    Bool(Istr),
 
-    Let(Binding, Box<Expr>),
-    Mut(Binding, Box<Expr>),
-    Assign(Ident, Box<Expr>),
-    Break(Option<Box<Expr>>),
-    Return(Option<Box<Expr>>),
-    Const(Box<Expr>),
-}
-impl Default for Exprkind {
-    fn default() -> Self {
-        Self::Tuple(Vec::new())
+pub mod expr {
+    use super::*;
+    pub struct If {
+        pub cond: Expr,
+        pub smash: Expr,
+        pub pass: Expr,
     }
+
+    pub struct Call {
+        pub func: Expr,
+        pub args: Expr,
+    }
+
+    pub struct Tuple(pub Vec<Expr>);
+    pub struct Loop(pub Expr);
+    pub struct Bareblock(pub Vec<Expr>);
+
+    pub struct Recall(pub Istr);
+    pub struct Number(pub Istr);
+    pub struct String(pub Istr);
+    pub struct Bool(pub Istr);
+
+    pub struct Let(pub Binding, pub Expr);
+    pub struct Mut(pub Binding, pub Expr);
+    pub struct Assign(pub Ident, pub Expr);
+    pub struct Break(pub Option<Expr>);
+    pub struct Return(pub Option<Expr>);
+    pub struct Const(pub Expr);
 }
 
 fn parse(ctx: &mut Tara, i: In) -> Out {
@@ -222,19 +240,74 @@ impl Parser<'_> {
     }
 
     fn top(&mut self) -> Ast {
-        let mut ast = Ast { funcs: Vec::new() };
+        let mut ast = Ast { items: Vec::new() };
         while !self.tokens.is_empty() {
             let decl = self.decls();
-            ast.funcs.push(decl);
+            ast.items.push(decl);
         }
         ast
     }
-    fn decls(&mut self) -> Function {
-        let cases = &[Tokenkind::Func];
-        self.dispatch(cases, &mut [&mut Self::function], |s| {
-            s.unexpected_token(s.peek(), cases, &[]);
-            std::process::exit(1)
-        })
+    fn decls(&mut self) -> Item {
+        let cases = &[Tokenkind::Func, Tokenkind::Type];
+        self.dispatch(
+            cases,
+            &mut [&mut |s| Item::Function(s.function()), &mut |s| {
+                Item::Typedecl(s.decls_type())
+            }],
+            |s| {
+                s.unexpected_token(s.peek(), cases, &[]);
+                std::process::exit(1)
+            },
+        )
+    }
+
+    fn decls_type(&mut self) -> Typedecl {
+        let mut loc = self.expect(Tokenkind::Type, &[]).loc;
+        let name = self.expect(Tokenkind::Name, &[]);
+        let cases = if self.check(Tokenkind::Equals).is_some() {
+            let def = self.type_variant();
+            loc = loc.meet(&def.loc);
+            vec![def]
+        } else {
+            let (def, l) = self.type_body();
+            loc = loc.meet(&l);
+            def
+        };
+        Typedecl {
+            name: Ident {
+                name: name.text,
+                loc: name.loc,
+            },
+            cases,
+            loc,
+        }
+    }
+
+    fn type_body(&mut self) -> (Vec<Typecase>, Provenance) {
+        let loc = self.expect(Tokenkind::OpenBrace, &[]).loc;
+        let mut cases = Vec::new();
+        while !self.next_is(Tokenkind::CloseBrace) {
+            let var = self.type_variant();
+            cases.push(var);
+        }
+        let loc = loc.meet(&self.expect(Tokenkind::CloseBrace, &[]).loc);
+        self.check(Tokenkind::Semicolon);
+        (cases, loc)
+    }
+
+    fn type_variant(&mut self) -> Typecase {
+        let loc = self.expect(Tokenkind::Case, &[]).loc;
+        let name = self.expect(Tokenkind::Name, &[]);
+        let binding = self.binding_parenthesised();
+        let loc = loc.meet(&self.expect(Tokenkind::Semicolon, &[]).loc);
+        Typecase {
+            loc,
+            name: Ident {
+                name: name.text,
+                loc: name.loc,
+            },
+            binding,
+        }
     }
 
     fn function(&mut self) -> Function {
@@ -244,7 +317,7 @@ impl Parser<'_> {
         let ret = if self.check(Tokenkind::Colon).is_some() {
             self.type_()
         } else {
-            Type::unit(args.loc())
+            Type::unit(args.loc)
         };
         let body = if self.check(Tokenkind::Equals).is_some() {
             self.expr_delimited()
@@ -288,7 +361,10 @@ impl Parser<'_> {
         } else {
             None
         };
-        Binding::Name(loc, name.text, typ)
+        Binding {
+            loc,
+            kind: Box::new(binding::Name(name.text, typ)),
+        }
     }
 
     fn binding_parenthesised(&mut self) -> Binding {
@@ -302,9 +378,15 @@ impl Parser<'_> {
         }
         let loc = loc.meet(&self.expect(Tokenkind::CloseParen, &[]).loc);
         match fields.len() {
-            0 => Binding::Empty(loc),
+            0 => Binding {
+                loc,
+                kind: Box::new(binding::Empty),
+            },
             1 => fields.pop().unwrap(),
-            _ => Binding::Tuple(loc, fields),
+            _ => Binding {
+                loc,
+                kind: Box::new(binding::Tuple(fields)),
+            },
         }
     }
 
@@ -543,13 +625,13 @@ impl Parser<'_> {
         } else {
             Expr {
                 loc: smash.loc,
-                kind: Exprkind::default(),
+                kind: Rc::new(expr::Tuple(vec![])),
             }
         };
         let loc = loc.meet(&pass.loc);
         Expr {
             loc,
-            kind: Exprkind::If(Box::new([cond, smash, pass])),
+            kind: Rc::new(expr::If { cond, smash, pass }),
         }
     }
 
@@ -559,7 +641,7 @@ impl Parser<'_> {
         let loc = loc.meet(&body.loc);
         Expr {
             loc,
-            kind: Exprkind::Loop(Box::new(body)),
+            kind: Rc::new(expr::Loop(body)),
         }
     }
 
@@ -571,7 +653,7 @@ impl Parser<'_> {
             if let Some(t) = self.check(Tokenkind::Semicolon) {
                 body.push(Expr {
                     loc: t.loc,
-                    kind: Exprkind::Const(Box::new(e)),
+                    kind: Rc::new(expr::Const(e)),
                 });
             } else {
                 body.push(e);
@@ -588,7 +670,7 @@ impl Parser<'_> {
         );
         Expr {
             loc,
-            kind: Exprkind::Bareblock(body),
+            kind: Rc::new(expr::Bareblock(body)),
         }
     }
 
@@ -629,13 +711,13 @@ impl Parser<'_> {
                 let args = self.expr_op(o.rbp.unwrap().get());
                 return Expr {
                     loc: t.loc.meet(&args.loc),
-                    kind: Exprkind::Call(Box::new([
-                        Expr {
+                    kind: Rc::new(expr::Call {
+                        func: Expr {
                             loc: t.loc,
-                            kind: Exprkind::Recall(t.text),
+                            kind: Rc::new(expr::Recall(t.text)),
                         },
                         args,
-                    ])),
+                    }),
                 };
             }
         }
@@ -663,7 +745,7 @@ impl Parser<'_> {
             let args = self.expr_parenthesised();
             return Expr {
                 loc: left.loc.meet(&args.loc),
-                kind: Exprkind::Call(Box::new([left, args])),
+                kind: Rc::new(expr::Call { func: left, args }),
             };
         }
         for o in self.ops.clone().iter() {
@@ -675,20 +757,20 @@ impl Parser<'_> {
                     let right = self.expr_op(rbp.get());
                     Expr {
                         loc: left.loc.meet(&right.loc),
-                        kind: Exprkind::Tuple(vec![left, right]),
+                        kind: Rc::new(expr::Tuple(vec![left, right])),
                     }
                 } else {
                     left
                 };
                 return Expr {
                     loc: args.loc.meet(&t.loc),
-                    kind: Exprkind::Call(Box::new([
-                        Expr {
+                    kind: Rc::new(expr::Call {
+                        func: Expr {
                             loc: t.loc,
-                            kind: Exprkind::Recall(t.text),
+                            kind: Rc::new(expr::Recall(t.text)),
                         },
                         args,
-                    ])),
+                    }),
                 };
             }
         }
@@ -704,28 +786,28 @@ impl Parser<'_> {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Exprkind::Recall(t.text),
+                    kind: Rc::new(expr::Recall(t.text)),
                 }
             }
             Some(Number) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Exprkind::Number(t.text),
+                    kind: Rc::new(expr::Number(t.text)),
                 }
             }
             Some(String) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Exprkind::String(t.text),
+                    kind: Rc::new(expr::String(t.text)),
                 }
             }
             Some(Bool) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Exprkind::Bool(t.text),
+                    kind: Rc::new(expr::Bool(t.text)),
                 }
             }
             _ => {
@@ -763,7 +845,7 @@ impl Parser<'_> {
             1 => fields.pop().unwrap(),
             _ => Expr {
                 loc,
-                kind: Exprkind::Tuple(fields),
+                kind: Rc::new(expr::Tuple(fields)),
             },
         }
     }
@@ -800,7 +882,7 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Exprkind::Let(binding, Box::new(init)),
+            kind: Rc::new(expr::Let(binding, init)),
         }
     }
 
@@ -812,7 +894,7 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Exprkind::Mut(binding, Box::new(init)),
+            kind: Rc::new(expr::Mut(binding, init)),
         }
     }
 
@@ -821,12 +903,12 @@ impl Parser<'_> {
         let val = if self.next_is(Tokenkind::Semicolon) {
             None
         } else {
-            Some(Box::new(self.expr_any()))
+            Some(self.expr_any())
         };
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Exprkind::Break(val),
+            kind: Rc::new(expr::Break(val)),
         }
     }
 
@@ -835,12 +917,12 @@ impl Parser<'_> {
         let val = if self.next_is(Tokenkind::Semicolon) {
             None
         } else {
-            Some(Box::new(self.expr_any()))
+            Some(self.expr_any())
         };
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Exprkind::Return(val),
+            kind: Rc::new(expr::Return(val)),
         }
     }
 
@@ -856,7 +938,7 @@ impl Parser<'_> {
         };
         Expr {
             loc,
-            kind: Exprkind::Assign(name, Box::new(val)),
+            kind: Rc::new(expr::Assign(name, val)),
         }
     }
 

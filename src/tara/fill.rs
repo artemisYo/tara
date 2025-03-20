@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
-use crate::{misc::Ivec, typer};
+use crate::typer;
 
 use super::{
-    uir::{self, BindingId, ExprId, Function, TypeId},
+    uir::{self, BindingId, ExprId, TypeId},
     Tara,
 };
 
@@ -22,78 +22,67 @@ impl Tara {
     }
 }
 
-struct Context<'a> {
-    f: &'a mut Function,
-    typevec: &'a mut Ivec<TypeId, uir::Typekind>,
-    s: Rc<std::collections::BTreeMap<usize, TypeId>>,
-}
+type Substs = Rc<std::collections::BTreeMap<usize, TypeId>>;
 
-fn fill(ctx: &mut Tara, i: In) {
-    let substs = ctx.typeck(typer::In { i: i.i });
-    let f = &mut ctx.uir_items[i.i];
-    let b = f.body;
-    Context {
-        s: substs.substitutions,
-        typevec: &mut ctx.uir_types,
-        f,
+fn fill(tara: &mut Tara, i: In) {
+    let substs = tara.typeck(typer::In { i: i.i }).substitutions;
+    match tara.uir_items[i.i] {
+        uir::Item::Function(ref f) => f.body.fill(i.i, &substs, tara),
+        uir::Item::Typedecl(_) => {}
     }
-    .expressions(b);
 }
 
-impl Context<'_> {
-    fn expressions(&mut self, b: ExprId) {
-        self.f.locals[b]
+impl ExprId {
+    fn fill(self, owner: uir::Id, substs: &Substs, tara: &mut Tara) {
+        tara[(owner, self)]
             .typ
             .kind
-            .replace(self.typevec, self.s.as_ref());
-        match self.f.locals[b].kind {
+            .replace(&mut tara.uir_types, substs);
+        match tara[(owner, self)].kind {
             uir::Exprkind::If { cond, smash, pass } => {
-                self.expressions(cond);
-                self.expressions(smash);
-                self.expressions(pass);
+                cond.fill(owner, substs, tara);
+                smash.fill(owner, substs, tara);
+                pass.fill(owner, substs, tara);
             }
             uir::Exprkind::Call { func, args } => {
-                self.expressions(func);
-                self.expressions(args);
+                func.fill(owner, substs, tara);
+                args.fill(owner, substs, tara);
             }
-            uir::Exprkind::Builtin { args, .. } => {
-                self.expressions(args);
-            },
-            uir::Exprkind::Tuple(ref expr_ids) | uir::Exprkind::Bareblock(ref expr_ids) => {
-                for &e in expr_ids.clone().iter() {
-                    self.expressions(e);
+            uir::Exprkind::Bareblock(ref ids) | uir::Exprkind::Tuple(ref ids) => {
+                for &e in ids.clone().iter() {
+                    e.fill(owner, substs, tara);
                 }
             }
-            uir::Exprkind::Arguments
-            | uir::Exprkind::Poison
+            uir::Exprkind::Builtin(_)
             | uir::Exprkind::Recall(_)
             | uir::Exprkind::Number(_)
             | uir::Exprkind::String(_)
-            | uir::Exprkind::Bool(_) => {}
-            uir::Exprkind::Assign(binding_id, expr_id)
-            | uir::Exprkind::Let(binding_id, expr_id) => {
-                self.bindings(binding_id);
-                self.expressions(expr_id);
+            | uir::Exprkind::Bool(_)
+            | uir::Exprkind::Arguments => {}
+            uir::Exprkind::Let(bid, eid) | uir::Exprkind::Assign(bid, eid) => {
+                bid.fill(owner, substs, tara);
+                eid.fill(owner, substs, tara);
             }
             uir::Exprkind::Loop(val)
             | uir::Exprkind::Break { val, .. }
             | uir::Exprkind::Return(val)
-            | uir::Exprkind::Const(val) => {
-                self.expressions(val);
-            }
+            | uir::Exprkind::Const(val) => val.fill(owner, substs, tara),
+            uir::Exprkind::Poison => std::process::exit(1),
         }
     }
+}
 
-    fn bindings(&mut self, b: BindingId) {
-        self.f.locals[b]
+impl BindingId {
+    fn fill(self, owner: uir::Id, substs: &Substs, tara: &mut Tara) {
+        tara[(owner, self)]
             .typ
             .kind
-            .replace(self.typevec, self.s.as_ref());
-        match &self.f.locals[b].kind {
+            .replace(&mut tara.uir_types, substs);
+        match tara[(owner, self)].kind {
             uir::Bindkind::Empty | uir::Bindkind::Name(_, _) => {}
-            uir::Bindkind::Tuple(binding_ids) => {
-                for &b in binding_ids.clone().iter() {
-                    self.bindings(b);
+            uir::Bindkind::Tuple(ref bids) => {
+                for &b in bids.clone().iter() {
+                    b.fill(owner, substs, tara);
                 }
             }
         }

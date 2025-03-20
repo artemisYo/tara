@@ -4,7 +4,8 @@ mod misc;
 mod tara;
 mod tokens;
 use inkwell::{
-    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine}, OptimizationLevel,
+    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine},
+    OptimizationLevel,
 };
 use misc::Ivec;
 pub use tara::*;
@@ -266,8 +267,7 @@ fn main() {
     let mut _start = None;
     // println!("---After resolution:");
     for &i in resolution.items.iter() {
-        let uir = ctx.get_uir(i);
-        if uir.name.name.0 == "_start" {
+        if ctx.item_name(i).name.0 == "_start" {
             _start = Some(i);
         }
         // let fmt = ctx.uir_items[i].fmt(&ctx.uir_types, &ctx.uir_items);
