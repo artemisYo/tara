@@ -1,0 +1,20 @@
+
+operator(4, >=, 4);
+operator(4, ==, 4);
+operator(6, &, 5);
+operator(6, |, 5);
+operator(6, >>, 5);
+operator(6, <<, 5);
+operator(7, +, 8);
+operator(7, -, 8);
+operator(_, ~, 10);
+
+func >=(a: int, b: int): bool = __builtin_cmp_ge(a, b);
+func ==(a: int, b: int): bool = __builtin_cmp_eq(a, b);
+func &(a: int, b: int): int = __builtin_and(a, b);
+func |(a: int, b: int): int = __builtin_or(a, b);
+func >>(a: int, b: int): int = __builtin_shr(a, b);
+func <<(a: int, b: int): int = __builtin_shl(a, b);
+func +(a: int, b: int): int = __builtin_add(a, b);
+func -(a: int, b: int): int = __builtin_sub(a, b);
+func ~(a: int): int = __builtin_not(a);
