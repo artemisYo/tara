@@ -6,9 +6,11 @@ pub mod prescan;
 pub mod typer;
 pub mod uir;
 
+use inkwell::targets::{self, TargetMachine};
+
 use crate::misc::Indexer;
-use crate::{report, Message};
 use crate::{ansi::Style, misc::Ivec, report_simple, MkIndexer, Provenance};
+use crate::{report, FmtMessage};
 use std::{
     collections::{BTreeMap as Map, BTreeSet as Set},
     path::PathBuf,
@@ -24,6 +26,7 @@ pub struct Tara {
     pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
     uir_tvars: usize,
     pub llvm_mod: inkwell::module::Module<'static>,
+    pub target: TargetMachine,
     // passes
     codegen: Map<codegen::In, Option<codegen::Out>>,
     fills: Set<fill::In>,
@@ -48,7 +51,7 @@ impl<I: Into<uir::Id>> std::ops::Index<(I, uir::BindingId)> for Tara {
 
 impl Tara {
     #[inline]
-    pub fn report(&self, head: Message, extra: &[Message]) {
+    pub fn report(&self, head: FmtMessage, extra: &[FmtMessage]) {
         report(&self.modules, head, extra);
     }
     #[inline]
@@ -76,10 +79,34 @@ impl Tara {
         let entry = modules.push(entry);
         let llvm_ctx = Box::leak(Box::new(inkwell::context::Context::create()));
         let llvm_mod = llvm_ctx.create_module("main");
+        targets::Target::initialize_native(&targets::InitializationConfig {
+            asm_parser: true,
+            asm_printer: true,
+            base: true,
+            disassembler: false,
+            info: false,
+            machine_code: true,
+        })
+        .unwrap();
+        let triple = TargetMachine::get_default_triple();
+        let target = targets::Target::from_triple(&triple).unwrap();
+        let cpu = TargetMachine::get_host_cpu_name();
+        let features = TargetMachine::get_host_cpu_features();
+        let target = target
+            .create_target_machine(
+                &triple,
+                cpu.to_str().unwrap(),
+                features.to_str().unwrap(),
+                inkwell::OptimizationLevel::None,
+                targets::RelocMode::Default,
+                targets::CodeModel::Default,
+            )
+            .unwrap();
         Self {
             modules,
             entry,
             llvm_mod,
+            target,
             codegen: Default::default(),
             fills: Default::default(),
             uir_items: Default::default(),

@@ -27,8 +27,15 @@ type Substs = Rc<std::collections::BTreeMap<usize, TypeId>>;
 fn fill(tara: &mut Tara, i: In) {
     let substs = tara.typeck(typer::In { i: i.i }).substitutions;
     match tara.uir_items[i.i] {
-        uir::Item::Function(ref f) => f.body.fill(i.i, &substs, tara),
+        uir::Item::Typecase(_) => {},
         uir::Item::Typedecl(_) => {}
+        uir::Item::Function(ref f) => f.body.fill(i.i, &substs, tara),
+        uir::Item::Namespace(_) => {
+            let is = tara.uir_interfaces[i.i].into_namespace().items.clone();
+            for &i in is.values() {
+                tara.fill(In { i });
+            }
+        }
     }
 }
 

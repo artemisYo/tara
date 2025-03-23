@@ -3,10 +3,14 @@ import io/...;
 
 type Foo {
     case Bar(a: int, b: bool);
-    case Baz(a: string, b: char);
+    case Baz(a: string, b: int);
 }
 
+func test(): Foo = 0;
+
 func main(): int {
+    test();
+
     let trans: int = 110;
     mut arr: int = 1;
     print_arr(arr);

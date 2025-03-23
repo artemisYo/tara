@@ -8,8 +8,8 @@ func fib(n: int): int = if n < 2 {
     fib(n - 2) + fib(n - 1)
 }
 
-func main(): int {
-    return fib(6);
+func main(): int = {
+    return fib(10);
 }
 
 func _start() {

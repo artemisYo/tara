@@ -2,15 +2,16 @@ use std::fmt::Write;
 use std::rc::Rc;
 
 use crate::{
+    message,
     misc::Istr,
-    preimport, prescan, report,
+    preimport, prescan,
     tokens::{Token, Tokenkind},
-    Message, Provenance,
+    FmtMessage, Provenance,
 };
 
 use super::{prescan::Opdef, uir, ModuleId, Tara};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Out {
     pub ast: Rc<Ast>,
 }
@@ -37,13 +38,10 @@ impl Tara {
     }
 }
 
+#[derive(Debug)]
 pub struct Ast {
-    pub items: Vec<Item>,
-}
-
-pub enum Item {
-    Function(Function),
-    Typedecl(Typedecl),
+    pub funcs: Vec<Function>,
+    pub types: Vec<Typedecl>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +50,7 @@ pub struct Ident {
     pub loc: Provenance,
 }
 
+#[derive(Debug)]
 pub struct Function {
     pub loc: Provenance,
     pub name: Ident,
@@ -60,12 +59,14 @@ pub struct Function {
     pub body: Expr,
 }
 
+#[derive(Debug)]
 pub struct Typedecl {
     pub loc: Provenance,
     pub name: Ident,
     pub cases: Vec<Typecase>,
 }
 
+#[derive(Debug)]
 pub struct Typecase {
     pub loc: Provenance,
     pub name: Ident,
@@ -107,6 +108,7 @@ impl Default for Typekind {
     }
 }
 
+#[derive(Debug)]
 pub struct Binding {
     pub loc: Provenance,
     pub kind: Box<dyn uir::BindingT>,
@@ -114,12 +116,16 @@ pub struct Binding {
 
 pub mod binding {
     use super::*;
+
+    #[derive(Debug)]
     pub struct Empty;
+    #[derive(Debug)]
     pub struct Name(pub Istr, pub Option<Type>);
+    #[derive(Debug)]
     pub struct Tuple(pub Vec<Binding>);
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub loc: Provenance,
     pub kind: Rc<dyn uir::ExprT>,
@@ -127,31 +133,48 @@ pub struct Expr {
 
 pub mod expr {
     use super::*;
+    #[derive(Debug)]
     pub struct If {
         pub cond: Expr,
         pub smash: Expr,
         pub pass: Expr,
     }
 
+    #[derive(Debug)]
     pub struct Call {
         pub func: Expr,
         pub args: Expr,
     }
 
+    #[derive(Debug)]
     pub struct Tuple(pub Vec<Expr>);
+    #[derive(Debug)]
     pub struct Loop(pub Expr);
+    #[derive(Debug)]
     pub struct Bareblock(pub Vec<Expr>);
 
+    #[derive(Debug)]
     pub struct Recall(pub Istr);
+    #[derive(Debug)]
+    pub struct Path(pub Vec<Ident>);
+    #[derive(Debug)]
     pub struct Number(pub Istr);
+    #[derive(Debug)]
     pub struct String(pub Istr);
+    #[derive(Debug)]
     pub struct Bool(pub Istr);
 
+    #[derive(Debug)]
     pub struct Let(pub Binding, pub Expr);
+    #[derive(Debug)]
     pub struct Mut(pub Binding, pub Expr);
+    #[derive(Debug)]
     pub struct Assign(pub Ident, pub Expr);
+    #[derive(Debug)]
     pub struct Break(pub Option<Expr>);
+    #[derive(Debug)]
     pub struct Return(pub Option<Expr>);
+    #[derive(Debug)]
     pub struct Const(pub Expr);
 }
 
@@ -231,7 +254,7 @@ impl Parser<'_> {
         self.tokens = &self.tokens[1..];
         out
     }
-    fn expect(&mut self, k: Tokenkind, notes: &[Message]) -> Token<Istr> {
+    fn expect(&mut self, k: Tokenkind, notes: &[FmtMessage]) -> Token<Istr> {
         if !self.next_is(k) {
             self.unexpected_token(self.peek(), &[k], notes);
             std::process::exit(1);
@@ -240,25 +263,28 @@ impl Parser<'_> {
     }
 
     fn top(&mut self) -> Ast {
-        let mut ast = Ast { items: Vec::new() };
+        let mut ast = Ast {
+            funcs: Vec::new(),
+            types: Vec::new(),
+        };
         while !self.tokens.is_empty() {
-            let decl = self.decls();
-            ast.items.push(decl);
+            self.decls(&mut ast);
         }
         ast
     }
-    fn decls(&mut self) -> Item {
+    fn decls(&mut self, ast: &mut Ast) {
         let cases = &[Tokenkind::Func, Tokenkind::Type];
-        self.dispatch(
+        match self.dispatch(
             cases,
-            &mut [&mut |s| Item::Function(s.function()), &mut |s| {
-                Item::Typedecl(s.decls_type())
-            }],
+            &mut [&mut |s| Ok(s.function()), &mut |s| Err(s.decls_type())],
             |s| {
                 s.unexpected_token(s.peek(), cases, &[]);
                 std::process::exit(1)
             },
-        )
+        ) {
+            Ok(f) => ast.funcs.push(f),
+            Err(t) => ast.types.push(t),
+        }
     }
 
     fn decls_type(&mut self) -> Typedecl {
@@ -664,7 +690,7 @@ impl Parser<'_> {
             &self
                 .expect(
                     Tokenkind::CloseBrace,
-                    &[Message::note("Maybe a missing semicolon?", None)],
+                    &[message!(note => "Maybe a missing semicolon?")],
                 )
                 .loc,
         );
@@ -783,10 +809,26 @@ impl Parser<'_> {
         match t.map(|t| t.kind) {
             Some(OpenParen) => self.expr_parenthesised(),
             Some(Name) => {
-                let t = self.eat();
+                let part = self.eat();
+                let mut names = vec![Ident {
+                    name: part.text,
+                    loc: part.loc,
+                }];
+                let mut loc = part.loc;
+                while self.check(Tokenkind::Slash).is_some() {
+                    let part = self.expect(Tokenkind::Name, &[]);
+                    names.push(Ident {
+                        name: part.text,
+                        loc: part.loc,
+                    });
+                    loc = loc.meet(&part.loc);
+                }
                 Expr {
-                    loc: t.loc,
-                    kind: Rc::new(expr::Recall(t.text)),
+                    kind: match names.len() {
+                        1 => Rc::new(expr::Recall(names[0].name)),
+                        _ => Rc::new(expr::Path(names)),
+                    },
+                    loc,
                 }
             }
             Some(Number) => {
@@ -942,7 +984,7 @@ impl Parser<'_> {
         }
     }
 
-    fn unexpected_token(&self, t: Option<Token<Istr>>, exps: &[Tokenkind], notes: &[Message]) {
+    fn unexpected_token(&self, t: Option<Token<Istr>>, exps: &[Tokenkind], notes: &[FmtMessage]) {
         let spell = t.map_or("EOF", |t| t.kind.spelling());
         let title = match exps.len() {
             0 => format!("Unexpected token '{}'!", spell),
@@ -957,6 +999,7 @@ impl Parser<'_> {
             }
         };
         let loc = t.map_or(self.ctx.eof_loc(self.m), |t| t.loc);
-        report(&self.ctx.modules, Message::error(&title, Some(loc)), notes);
+        // self.ctx.report(Message::error(&title, Some(loc)), notes);
+        self.ctx.report(message!(error @ loc => "{}", title), notes);
     }
 }

@@ -3,10 +3,7 @@ mod lexer;
 mod misc;
 mod tara;
 mod tokens;
-use inkwell::{
-    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine},
-    OptimizationLevel,
-};
+use inkwell::targets::FileType;
 use misc::Ivec;
 pub use tara::*;
 
@@ -124,14 +121,14 @@ impl Provenance {
     }
 }
 
-pub struct Message<'a> {
+pub struct FmtMessage<'a> {
     span: Option<Provenance>,
     pointer: Style,
     kind: StyledStr<'a>,
-    title: &'a str,
+    title: std::fmt::Arguments<'a>,
 }
-impl<'a> Message<'a> {
-    pub const fn error(title: &'a str, span: Option<Provenance>) -> Self {
+impl<'a> FmtMessage<'a> {
+    pub fn error(title: std::fmt::Arguments<'a>, span: Option<Provenance>) -> Self {
         Self {
             span,
             title,
@@ -139,7 +136,7 @@ impl<'a> Message<'a> {
             pointer: Style::red().merge(Style::underline()),
         }
     }
-    pub const fn note(title: &'a str, span: Option<Provenance>) -> Self {
+    pub fn note(title: std::fmt::Arguments<'a>, span: Option<Provenance>) -> Self {
         Self {
             span,
             title,
@@ -156,6 +153,46 @@ impl<'a> Message<'a> {
     }
 }
 
+#[macro_export]
+macro_rules! message {
+    (error => $fmt:literal) => {
+        $crate::FmtMessage::error(format_args!($fmt), None)
+    };
+    (error @ $span:expr => $fmt:literal) => {
+        $crate::FmtMessage::error(format_args!($fmt), Some($span))
+    };
+    (error @? $span:expr => $fmt:literal) => {
+        $crate::FmtMessage::error(format_args!($fmt), $span)
+    };
+    (error => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), None)
+    };
+    (error @ $span:expr => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), Some($span))
+    };
+    (error @? $span:expr => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), $span)
+    };
+    (note => $fmt:literal) => {
+        $crate::FmtMessage::note(format_args!($fmt), None)
+    };
+    (note @ $span:expr => $fmt:literal) => {
+        $crate::FmtMessage::note(format_args!($fmt), Some($span))
+    };
+    (note @? $span:expr => $fmt:literal) => {
+        $crate::FmtMessage::note(format_args!($fmt), $span)
+    };
+    (note => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), None)
+    };
+    (note @ $span:expr => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), Some($span))
+    };
+    (note @? $span:expr => $fmt:literal, $($args:tt)*) => {
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), $span)
+    };
+}
+
 pub fn report_simple(kind: StyledStr, title: &str, extra: Option<&str>) {
     if let Some(extra) = extra {
         println!("╭─[{}]: {}", kind, title);
@@ -166,7 +203,7 @@ pub fn report_simple(kind: StyledStr, title: &str, extra: Option<&str>) {
     }
 }
 
-pub fn report(ctx: &Ivec<ModuleId, Module>, head: Message, extra: &[Message]) {
+pub fn report(ctx: &Ivec<ModuleId, Module>, head: FmtMessage, extra: &[FmtMessage]) {
     print!("╭─");
     head.print_header(ctx);
     let mut digits = extra
@@ -198,10 +235,10 @@ pub fn report(ctx: &Ivec<ModuleId, Module>, head: Message, extra: &[Message]) {
 }
 
 fn main() {
-    let mut ctx = Tara::from("rule110/main.tara");
+    let mut ctx = Tara::from("example/main.tara");
     report(
         &ctx.modules,
-        Message {
+        FmtMessage {
             span: Some(Provenance::Span {
                 module: ctx.entry,
                 start: 0,
@@ -209,80 +246,55 @@ fn main() {
             }),
             pointer: Style::default(),
             kind: Style::yellow().apply("Cat"),
-            title: "",
+            title: format_args!(""),
         },
         &[],
     );
 
     let pi = ctx.preimport(preimport::In { m: ctx.entry });
-    let imports: Vec<_> = pi.imports.iter().map(|o| format!("{o:?}")).collect();
-    // let ops: Vec<_> = pi.ops.iter().map(|o| format!("{o:?}")).collect();
     report(
         &ctx.modules,
-        Message {
+        FmtMessage {
             span: None,
             pointer: Style::default(),
             kind: Style::yellow().apply("Ops"),
-            title: "",
+            title: format_args!(""),
         },
         pi.ops
             .iter()
-            .map(|o| Message {
+            .map(|o| FmtMessage {
                 span: Some(o.loc),
                 pointer: Style::underline(),
                 kind: Style::yellow().apply("Operator"),
-                title: "",
-            })
-            .collect::<Vec<_>>()
-            .as_ref(),
-    );
-    report(
-        &ctx.modules,
-        Message {
-            span: None,
-            pointer: Style::default(),
-            kind: Style::yellow().apply("Imports"),
-            title: "",
-        },
-        imports
-            .iter()
-            .map(|i| Message {
-                span: None,
-                pointer: Style::default(),
-                kind: Style::yellow().apply("Import"),
-                title: i,
+                title: format_args!(""),
             })
             .collect::<Vec<_>>()
             .as_ref(),
     );
 
-    // let parse = ctx.parse(parse::In { m: ctx.entry });
-    // for f in &parse.ast.funcs {
-    //     if f.name.name.0 == "main" {
-    //         println!("{:#?}", f);
-    //     }
-    // }
+    dbg!(ctx.parse(parse::In { m: ctx.entry }).ast);
 
     let resolution = ctx.resolve(uir::In { m: ctx.entry });
     let mut _start = None;
-    // println!("---After resolution:");
     for &i in resolution.items.iter() {
+        if let uir::Item::Function(f) = &ctx.uir_items[i] {
+            println!(
+                "{}",
+                f.fmt(
+                    &ctx.uir_interfaces[i].into_func_immut(),
+                    &ctx.uir_locals[i],
+                    &ctx.uir_interfaces,
+                    &ctx.uir_types,
+                    &ctx.uir_items,
+                )
+            );
+        }
         if ctx.item_name(i).name.0 == "_start" {
             _start = Some(i);
         }
-        // let fmt = ctx.uir_items[i].fmt(&ctx.uir_types, &ctx.uir_items);
-        // println!("{}\n", fmt);
     }
 
-    // println!("---After filling:");
-    // for &i in resolution.items.iter() {
-    //     ctx.fill(fill::In { i });
-    //     let fmt = ctx.uir_items[i].fmt(&ctx.uir_types, &ctx.uir_items);
-    //     println!("{}\n", fmt);
-    // }
-
     ctx.codegen(codegen::In { i: _start.unwrap() });
-    // ctx.llvm_mod.print_to_stderr();
     match ctx.llvm_mod.verify() {
         Ok(()) => {}
         Err(msg) => {
@@ -292,30 +304,7 @@ fn main() {
     }
 
     // Emit
-    Target::initialize_native(&InitializationConfig {
-        asm_parser: true,
-        asm_printer: true,
-        base: true,
-        disassembler: false,
-        info: false,
-        machine_code: true,
-    })
-    .unwrap();
-    let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple).unwrap();
-    let cpu = TargetMachine::get_host_cpu_name();
-    let features = TargetMachine::get_host_cpu_features();
-    let machine = target
-        .create_target_machine(
-            &triple,
-            cpu.to_str().unwrap(),
-            features.to_str().unwrap(),
-            OptimizationLevel::None,
-            RelocMode::Default,
-            CodeModel::Default,
-        )
-        .unwrap();
-    machine
+    ctx.target
         .write_to_file(&ctx.llvm_mod, FileType::Object, "./out.o".as_ref())
         .unwrap();
 }

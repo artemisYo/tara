@@ -75,6 +75,7 @@ impl<'src> Lexer<'src> {
             return None;
         }
         let len = text.iter().take_while(|&&b| b != b'\n').count() + 1;
+        let len = len.min(text.len());
         self.offset += len;
         Some(Token {
             kind: Tokenkind::Comment,

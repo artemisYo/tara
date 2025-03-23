@@ -1,11 +1,22 @@
 use std::{cell::RefCell, collections::BTreeSet, marker::PhantomData};
 
+pub trait CheapClone: Clone {
+    fn cheap(&self) -> Self {
+        self.clone()
+    }
+}
+impl<T: ?Sized> CheapClone for std::rc::Rc<T> {}
+
 #[derive(Debug)]
 pub struct Svec<K, V> {
     keys: Vec<K>,
     vals: Vec<V>,
 }
 impl<K: Eq, V> Svec<K, V> {
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.vals.iter()
+    }
     #[inline]
     pub fn excursion<O>(&mut self, f: impl FnOnce(&mut Self) -> O) -> O {
         let start = self.len();
@@ -55,6 +66,7 @@ impl<I: Indexer, T> Ivec<I, T> {
     }
     pub fn register(&mut self, value: T, id: I) -> Result<(), ()> {
         if I::from(self.inner.len()) != id {
+            dbg!(id.into(), self.inner.len());
             return Err(());
         }
         self.inner.push(value);

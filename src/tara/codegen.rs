@@ -2,26 +2,29 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::ContextRef,
-    types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StringRadix},
+    types::{
+        AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StringRadix, StructType,
+    },
     values::{AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
     AddressSpace, InlineAsmDialect, IntPredicate,
 };
-use std::collections::BTreeMap as Map;
+use std::{collections::BTreeMap as Map, rc::Rc};
 
 use crate::{
     fill,
-    misc::{Istr, Ivec},
+    misc::{CheapClone, Istr},
 };
 
 use super::{
-    uir::{self, ExprId, FuncId},
+    uir::{self, ExprId, FuncId, TypecaseId, TypedeclId},
     Tara,
 };
 
 #[derive(Clone)]
 pub enum Out {
-    Typedecl(),
+    Typedecl(StructType<'static>, Rc<[StructType<'static>]>),
     Func(FunctionValue<'static>),
+    Namespace(Rc<[Out]>),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -55,15 +58,113 @@ type Result = std::result::Result<AnyValueEnum<'static>, Control>;
 fn codegen(tara: &mut Tara, i: In) -> Out {
     tara.fill(fill::In { i: i.i });
     match tara.uir_items[i.i] {
-        uir::Item::Typedecl(_) => Out::Typedecl(),
+        uir::Item::Typecase(_) => typecases(i.i.into_typecase(), tara),
+        uir::Item::Typedecl(_) => typedecls(i.i.into_typedecl(), tara),
         uir::Item::Function(_) => functions(i.i.into_func(), tara),
+        uir::Item::Namespace(_) => {
+            let is = tara.uir_interfaces[i.i].into_namespace().items.clone();
+            let mut items = Vec::with_capacity(is.len());
+            for &i in is.values() {
+                items.push(tara.codegen(In { i }));
+            }
+            Out::Namespace(items.into())
+        }
     }
 }
 
-fn functions(f: FuncId, tara: &mut Tara) -> Out {
-    let ty = tara.uir_types[tara.uir_interfaces[f].typ.kind].clone();
+fn typedecls(d: TypedeclId, tara: &mut Tara) -> Out {
+    let ctx = tara.llvm_mod.get_context();
+    let cases = tara.uir_items[d].cases.cheap();
+    let tag_size = cases.len().next_power_of_two().ilog2();
+    let tag_type = ctx.custom_width_int_type(tag_size);
+    let tag_align = tara.target.get_target_data().get_abi_alignment(&tag_type);
+    let cases_tails: Vec<_> = cases
+        .iter()
+        .map(|&c| {
+            let bind = tara.uir_interfaces[c].binding;
+            let bind = tara[(c, bind)].typ.kind;
+            let bind = tara.uir_types[bind].cheap();
+            any_to_basic_type(lower_type(bind, None, tara, ctx), ctx)
+        })
+        .collect();
+    let tail_size = cases_tails
+        .iter()
+        .map(|t| tara.target.get_target_data().get_abi_size(t))
+        .max()
+        .unwrap_or(0)
+        .next_multiple_of(tag_align as u64);
+    let opaque_type = ctx.struct_type(
+        &[
+            ctx.custom_width_int_type(tail_size as u32 * 8).into(),
+            tag_type.into(),
+        ],
+        false,
+    );
+    let tail_types: Vec<_> = cases_tails
+        .into_iter()
+        .map(|tail| {
+            let padding = tail_size - tara.target.get_target_data().get_abi_size(&tail);
+            ctx.struct_type(
+                &[
+                    tail,
+                    ctx.custom_width_int_type(padding as u32 * 8).into(),
+                    tag_type.into(),
+                ],
+                false,
+            )
+        })
+        .collect();
+    Out::Typedecl(opaque_type, tail_types.into())
+}
+
+// |                i36                 | i5  |
+// | ?????????????? tail ?????????????? | tag |
+//    ↓
+// |   i11    |  i7  |   i9   |   i9    | i5  |
+// | concrete | tail | fields | padding | tag |
+fn typecases(c: TypecaseId, tara: &mut Tara) -> Out {
+    let case = tara.uir_interfaces[c];
+    let name = case.name.name.0;
+    let ty = tara.uir_types[case.typ.kind].clone();
     let llvm_ctx = tara.llvm_mod.get_context();
-    let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, &tara.uir_types, llvm_ctx) else {
+    let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, tara, llvm_ctx) else {
+        panic!("constructors should be functions?")
+    };
+    let (ret, agg_type) = match tara.codegen(In {
+        i: case.parent.into(),
+    }) {
+        Out::Typedecl(ret, cases_type) => (ret, cases_type[case.index]),
+        _ => panic!(),
+    };
+
+    let val = tara.llvm_mod.add_function(name, ty, None);
+    let entry = llvm_ctx.append_basic_block(val, "entry");
+    let builder = llvm_ctx.create_builder();
+    builder.position_at_end(entry);
+
+    let agg = agg_type.get_undef();
+    let bind = val.get_first_param().unwrap();
+    let agg = builder
+        .build_insert_value(agg, bind, 0, "typecase_tail")
+        .unwrap();
+    let Some(BasicTypeEnum::IntType(tag)) = agg_type.get_field_type_at_index(2) else {
+        panic!()
+    };
+    let tag = tag.const_int(case.index as u64, false);
+    let agg = builder
+        .build_insert_value(agg, tag, 2, "typecase_tag")
+        .unwrap();
+    let agg = builder.build_bit_cast(agg, ret, "typecase_to_opaque").unwrap();
+    builder.build_return(Some(&agg)).unwrap();
+
+    Out::Func(val)
+}
+
+fn functions(f: FuncId, tara: &mut Tara) -> Out {
+    let ty = tara.item_type(f.into(), None).kind;
+    let ty = tara.uir_types[ty].clone();
+    let llvm_ctx = tara.llvm_mod.get_context();
+    let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, tara, llvm_ctx) else {
         panic!("non-function typed functions??")
     };
     let val = tara
@@ -136,13 +237,15 @@ fn any_to_basic_value(v: AnyValueEnum<'static>) -> BasicValueEnum<'static> {
 fn lower_type(
     t: uir::Typekind,
     args: Option<uir::Typekind>,
-    types: &Ivec<uir::TypeId, uir::Typekind>,
+    tara: &mut Tara,
     ctx: ContextRef<'static>,
 ) -> AnyTypeEnum<'static> {
     match t {
+        uir::Typekind::Bundle(_) => panic!("found bundle outside of call!"),
+        uir::Typekind::Var(n) => panic!("well something went wrong!\nfound type var: {}", n),
         uir::Typekind::Func { args, ret } => {
-            let args = types[args].clone();
-            let args: BasicMetadataTypeEnum = match lower_type(args, None, types, ctx) {
+            let args = tara.uir_types[args].clone();
+            let args: BasicMetadataTypeEnum = match lower_type(args, None, tara, ctx) {
                 AnyTypeEnum::FunctionType(_) => ctx.ptr_type(AddressSpace::from(0u16)).into(),
                 AnyTypeEnum::ArrayType(t) => t.into(),
                 AnyTypeEnum::FloatType(t) => t.into(),
@@ -152,14 +255,14 @@ fn lower_type(
                 AnyTypeEnum::VectorType(t) => t.into(),
                 AnyTypeEnum::VoidType(_) => panic!("I have no idea"),
             };
-            let ret = types[ret].clone();
-            let ret = any_to_basic_type(lower_type(ret, None, types, ctx), ctx);
+            let ret = tara.uir_types[ret].clone();
+            let ret = any_to_basic_type(lower_type(ret, None, tara, ctx), ctx);
             ret.fn_type(&[args], false).into()
         }
         uir::Typekind::Call { args, func } => {
-            let args = types[args].clone();
-            let func = types[func].clone();
-            lower_type(func, Some(args), types, ctx)
+            let args = tara.uir_types[args].clone();
+            let func = tara.uir_types[func].clone();
+            lower_type(func, Some(args), tara, ctx)
         }
         uir::Typekind::String => ctx.ptr_type(AddressSpace::from(0u16)).into(),
         uir::Typekind::Bool => ctx.custom_width_int_type(1).into(),
@@ -170,8 +273,8 @@ fn lower_type(
             };
             let mut fields = Vec::with_capacity(args.len());
             for &a in args.iter() {
-                let a = types[a].clone();
-                let a: BasicTypeEnum = match lower_type(a, None, types, ctx) {
+                let a = tara.uir_types[a].clone();
+                let a: BasicTypeEnum = match lower_type(a, None, tara, ctx) {
                     AnyTypeEnum::FunctionType(_) => ctx.ptr_type(AddressSpace::from(0u16)).into(),
                     AnyTypeEnum::ArrayType(t) => t.into(),
                     AnyTypeEnum::FloatType(t) => t.into(),
@@ -185,9 +288,10 @@ fn lower_type(
             }
             ctx.struct_type(fields.as_slice(), false).into()
         }
-        uir::Typekind::Recall(_) => todo!("custom types do not exist yet"),
-        uir::Typekind::Bundle(_) => panic!("found bundle outside of call!"),
-        uir::Typekind::Var(n) => panic!("well something went wrong!\nfound type var: {}", n),
+        uir::Typekind::Recall(id) => match tara.codegen(In { i: id }) {
+            Out::Func(_) | Out::Namespace(_) => panic!("why is a non-type id in the type?"),
+            Out::Typedecl(t, _) => t.into(),
+        },
     }
 }
 
@@ -297,8 +401,7 @@ impl Context<'_> {
             uir::Exprkind::Tuple(ref expr_ids) => {
                 let expr_ids = expr_ids.clone();
                 let ty = self.tara.uir_types[self.tara[(self.id, e)].typ.kind].clone();
-                let AnyTypeEnum::StructType(ty) =
-                    lower_type(ty, None, &self.tara.uir_types, self.ctx)
+                let AnyTypeEnum::StructType(ty) = lower_type(ty, None, self.tara, self.ctx)
                 else {
                     panic!("aaaaaaaa")
                 };
@@ -315,7 +418,7 @@ impl Context<'_> {
             uir::Exprkind::Loop(expr_id) => {
                 let ty = self.tara[(self.id, e)].typ.kind;
                 let ty = self.tara.uir_types[ty].clone();
-                let ty = lower_type(ty, None, &self.tara.uir_types, self.ctx);
+                let ty = lower_type(ty, None, self.tara, self.ctx);
                 let ty = any_to_basic_type(ty, self.ctx);
                 let post_v = self.builder.build_alloca(ty, "&loop_slot").unwrap();
                 let loop_b = self.ctx.append_basic_block(self.val, "loop");
