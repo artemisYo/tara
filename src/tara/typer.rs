@@ -1,44 +1,33 @@
 use std::collections::BTreeMap as Map;
 use std::rc::Rc;
 
-use crate::{message, misc::Ivec, Provenance};
+use either::Either::{Left, Right};
+
+use crate::{gen_query, message, misc::CheapClone, Provenance};
 
 use super::{
-    uir::{self, ExprId, FuncId, Type, TypeId, Typekind},
-    Tara,
+    fill,
+    quir::{self, expr, Binding, BindingId, Expr, ExprId, FunctionId, Type, TypeId, Typekind},
+    resolve, Tara,
 };
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct In {
-    pub i: uir::Id,
+    pub i: quir::Id,
 }
 
 #[derive(Clone)]
 pub struct Out {
     pub substitutions: Rc<Map<usize, TypeId>>,
 }
-
-impl Tara {
-    pub fn typeck(&mut self, i: In) -> Out {
-        match self.typecheck.get(&i) {
-            Some(Some(o)) => o.clone(),
-            Some(None) => panic!("typeck entered a cycle!"),
-            None => {
-                self.typecheck.insert(i, None);
-                let data = typeck(self, i);
-                self.typecheck.insert(i, Some(data));
-                self.typecheck.get(&i).cloned().unwrap().unwrap()
-            }
-        }
-    }
-}
+impl CheapClone for Out {}
 
 pub enum Constraint {
-    Unify(Type, Type),
+    Unify(u32, Type, Type),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum ControlFlow {
+pub(super) enum ControlFlow {
     Return,
     Break,
 }
@@ -52,197 +41,468 @@ impl ControlFlow {
     }
 }
 
-fn typeck(tara: &mut Tara, i: In) -> Out {
-    let constraints = items(i.i, tara);
+gen_query!(typecheck);
+fn typecheck(tara: &mut Tara, In { i }: In) -> Out {
+    let mut constraints = vec![];
+    let module = tara.quir_items[i].module();
+    tara.resolve(resolve::In { m: module });
+    i.typecheck(&mut constraints, tara);
     let substitutions = solve_constraints(constraints, tara);
     Out {
         substitutions: Rc::new(substitutions),
     }
 }
 
-fn items(i: uir::Id, tara: &mut Tara) -> Vec<Constraint> {
-    match tara.uir_items[i] {
-        uir::Item::Typecase(_) => vec![],
-        uir::Item::Typedecl(_) => vec![],
-        uir::Item::Function(_) => funcs(i.into_func(), tara),
-        uir::Item::Namespace(_) => {
-            let is = tara.uir_interfaces[i].into_namespace().items.clone();
-            for &i in is.values() {
-                tara.typeck(In { i });
+macro_rules! unify {
+    ($cs:expr, $a:expr, $b:expr) => {
+        ($cs).unify(line!(), $a, $b)
+    };
+}
+
+impl quir::Id {
+    fn typecheck(self, constraints: &mut Vec<Constraint>, tara: &mut Tara) {
+        match tara.quir_items[self] {
+            quir::Item::Typecase(_) | quir::Item::Typedecl(_) => {}
+            quir::Item::Namespace(ref n) => {
+                for &id in n.items.cheap().values() {
+                    id.typecheck(constraints, tara);
+                }
             }
-            vec![]
+            quir::Item::Function(ref f) => {
+                let body = f.body;
+                let Typekind::Func { ret, .. } = tara.quir_types[f.typ.kind] else {
+                    panic!();
+                };
+                let ret = Type {
+                    loc: f.typ.loc,
+                    kind: ret,
+                };
+                let mut ctx = Ctx {
+                    owner: self.into_func(),
+                    constraints,
+                    tara,
+                };
+                if let Ok(t) = body.typecheck(&mut ctx) {
+                    //ctx.unify(ret, t);
+                    unify!(ctx, ret, t);
+                }
+            }
         }
     }
 }
 
-fn funcs(i: FuncId, tara: &mut Tara) -> Vec<Constraint> {
-    let mut constraints = vec![];
-    let body = tara.uir_items[i].body;
-    if let Ok(t) = body.typeck(i, &mut constraints, tara) {
-        constraints.push(Constraint::Unify(
-            tara.uir_interfaces[i].typ.ret(&tara.uir_types).unwrap(),
-            t,
-        ));
+pub(super) struct Ctx<'a> {
+    owner: FunctionId,
+    tara: &'a mut Tara,
+    constraints: &'a mut Vec<Constraint>,
+}
+impl Ctx<'_> {
+    fn unify(&mut self, line: u32, a: Type, b: Type) {
+        self.constraints.push(Constraint::Unify(line, a, b));
     }
-    constraints
+}
+impl std::ops::Index<ExprId> for Ctx<'_> {
+    type Output = Expr;
+    fn index(&self, id: ExprId) -> &Self::Output {
+        &self.tara.quir_items[self.owner].locals[id]
+    }
+}
+impl std::ops::Index<BindingId> for Ctx<'_> {
+    type Output = Binding;
+    fn index(&self, id: BindingId) -> &Self::Output {
+        &self.tara.quir_items[self.owner].locals[id]
+    }
 }
 
 impl ExprId {
-    fn typeck(
-        self,
-        owner: FuncId,
-        cs: &mut Vec<Constraint>,
-        tara: &mut Tara,
-    ) -> Result<Type, ControlFlow> {
-        let loc = tara[(owner, self)].loc;
-        let old_type = tara[(owner, self)].typ;
-        let typ = match tara[(owner, self)].kind {
-            uir::Exprkind::Poison => std::process::exit(1),
-            uir::Exprkind::If { cond, smash, pass } => {
-                let cond_t = cond.typeck(owner, cs, tara)?;
-                let cond_loc = tara[(owner, cond)].loc;
-                let bool_t = Type::simple(&mut tara.uir_types, Typekind::Bool, cond_loc);
-                cs.push(Constraint::Unify(cond_t, bool_t));
-                let smash = smash.typeck(owner, cs, tara);
-                let pass = pass.typeck(owner, cs, tara);
-                let (smash, pass) = match (smash, pass) {
-                    (Err(s), Err(p)) => return Err(s.minimum(p)),
-                    (Err(_), Ok(k)) | (Ok(k), Err(_)) => (k, tara[(owner, self)].typ),
-                    (Ok(s), Ok(p)) => (s, p),
-                };
-                cs.push(Constraint::Unify(smash, pass));
-                smash
-            }
-            uir::Exprkind::Call { func, args } => {
-                let func = func.typeck(owner, cs, tara)?;
-                dbg!(&tara.uir_types[func.kind]);
-                let args = args.typeck(owner, cs, tara)?;
-                dbg!(&tara.uir_types[args.kind]);
-                let ret = old_type;
-                dbg!(&tara.uir_types[ret.kind]);
-                let unapp = Type::func(&mut tara.uir_types, args, ret, loc);
-                dbg!(&tara.uir_types[unapp.kind]);
-                cs.push(Constraint::Unify(func, unapp));
-                ret
-            }
-            uir::Exprkind::Builtin(builtinkind) => builtins(builtinkind, loc, tara),
-            uir::Exprkind::Tuple(ref expr_ids) => {
-                let mut fields = Vec::new();
-                for &e in expr_ids.clone().iter() {
-                    fields.push(e.typeck(owner, cs, tara)?);
-                }
-                Type::tup(&mut tara.uir_types, &fields, loc)
-            }
-            uir::Exprkind::Loop(id) => {
-                if Err(ControlFlow::Return) == id.typeck(owner, cs, tara) {
-                    return Err(ControlFlow::Return);
-                }
-                tara[(owner, self)].typ
-            }
-            uir::Exprkind::Bareblock(ref ids) => {
-                let ids = ids.clone();
-                let mut t = Type::unit(&mut tara.uir_types, loc);
-                for e in ids.iter() {
-                    t = e.typeck(owner, cs, tara)?;
-                }
-                t
-            }
-            uir::Exprkind::Recall(Ok(bid)) => tara[(owner, bid)].typ,
-            uir::Exprkind::Recall(Err(id)) => tara.item_type(id, Some(loc)),
-            uir::Exprkind::Number(_) => Type::simple(&mut tara.uir_types, Typekind::Int, loc),
-            uir::Exprkind::String(_) => Type::simple(&mut tara.uir_types, Typekind::String, loc),
-            uir::Exprkind::Bool(_) => Type::simple(&mut tara.uir_types, Typekind::Bool, loc),
-            uir::Exprkind::Arguments => tara[(owner, self)].typ,
-            uir::Exprkind::Let(bid, eid) => {
-                let bind = tara[(owner, bid)].typ;
-                let expr = eid.typeck(owner, cs, tara)?;
-                cs.push(Constraint::Unify(bind, expr));
-                tara.unit(loc)
-            }
-            uir::Exprkind::Assign(bid, eid) => {
-                if let uir::Bindkind::Name(n, false) = tara[(owner, bid)].kind {
-                    let decl_loc = tara[(owner, bid)].loc;
-                    tara.report(
-                        message!(error @ loc => "Cannot reassign an immutable variable!"),
-                        &[message!( note @ decl_loc => "'{}' is declared here!", n.0)],
-                    );
-                    std::process::exit(1);
-                }
-                let bind = tara[(owner, bid)].typ;
-                let expr = eid.typeck(owner, cs, tara)?;
-                cs.push(Constraint::Unify(bind, expr));
-                tara.unit(loc)
-            }
-            uir::Exprkind::Break { val, target } => {
-                let val = val.typeck(owner, cs, tara)?;
-                let target = tara[(owner, target)].typ;
-                cs.push(Constraint::Unify(val, target));
-                return Err(ControlFlow::Break);
-            }
-            uir::Exprkind::Return(val) => {
-                let val = val.typeck(owner, cs, tara)?;
-                let target = tara.uir_interfaces[owner].typ.ret(&tara.uir_types).unwrap();
-                cs.push(Constraint::Unify(val, target));
-                return Err(ControlFlow::Return);
-            }
-            uir::Exprkind::Const(eid) => {
-                eid.typeck(owner, cs, tara)?;
-                tara.unit(loc)
-            }
-        };
-        // probably not always needed but included for sanity
-        cs.push(Constraint::Unify(typ, old_type));
+    fn typecheck(self, ctx: &mut Ctx) -> Result<Type, ControlFlow> {
+        let e = ctx[self].cheap();
+        let typ = e.kind.typecheck(e.loc, e.typ, ctx)?;
+        // probably not needed like this, but here for sanity
+        // ctx.unify(typ, e.typ);
+        unify!(ctx, typ, e.typ);
         Ok(typ)
     }
 }
 
-fn builtins(kind: uir::Builtinkind, l: Provenance, tara: &mut Tara) -> Type {
-    let typevec = &mut tara.uir_types;
-    let int_t = Type::simple(typevec, Typekind::Int, l);
-    let bool_t = Type::simple(typevec, Typekind::Bool, l);
-    let string_t = Type::simple(typevec, Typekind::String, l);
-    let ints = [int_t, int_t, int_t, int_t, int_t, int_t, int_t];
-    let int2_t = Type::tup(typevec, &ints[0..2], l);
-    let int7_t = Type::tup(typevec, &ints, l);
-    match kind {
-        uir::Builtinkind::Add
-        | uir::Builtinkind::Sub
-        | uir::Builtinkind::Mul
-        | uir::Builtinkind::Div
-        | uir::Builtinkind::Mod
-        | uir::Builtinkind::And
-        | uir::Builtinkind::Or
-        | uir::Builtinkind::Xor
-        | uir::Builtinkind::ShLeft
-        | uir::Builtinkind::ShRight => Type::func(typevec, int2_t, int_t, l),
-        uir::Builtinkind::Not | uir::Builtinkind::Negate => Type::func(typevec, int_t, int_t, l),
-        uir::Builtinkind::CmpEq
-        | uir::Builtinkind::CmpNE
-        | uir::Builtinkind::CmpGt
-        | uir::Builtinkind::CmpLt
-        | uir::Builtinkind::CmpGE
-        | uir::Builtinkind::CmpLE => Type::func(typevec, int2_t, bool_t, l),
-        uir::Builtinkind::Syscall => Type::func(typevec, int7_t, int_t, l),
-        uir::Builtinkind::PtrToInt => Type::func(typevec, string_t, int_t, l),
-        uir::Builtinkind::IntToPtr => Type::func(typevec, int_t, string_t, l),
+impl expr::If {
+    pub(super) fn typecheck(
+        &self,
+        _: Provenance,
+        typ: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let cond_t = self.cond.typecheck(ctx)?;
+        let cond_loc = ctx[self.cond].loc;
+        let bool_t = Type {
+            kind: ctx.tara.intern(Typekind::Bool),
+            loc: cond_loc,
+        };
+        // ctx.unify(cond_t, bool_t);
+        unify!(ctx, cond_t, bool_t);
+        let smash = self.smash.typecheck(ctx);
+        let pass = self.pass.typecheck(ctx);
+        let (smash, pass) = match (smash, pass) {
+            (Err(s), Err(p)) => return Err(s.minimum(p)),
+            (Err(_), Ok(k)) | (Ok(k), Err(_)) => (k, typ),
+            (Ok(s), Ok(p)) => (s, p),
+        };
+        // ctx.unify(smash, pass);
+        unify!(ctx, smash, pass);
+        Ok(smash)
+    }
+}
+
+impl expr::Call {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        typ: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let func = self.func.typecheck(ctx)?;
+        let args = self.args.typecheck(ctx)?.kind;
+        let ret = typ.kind;
+        let unapp = Type {
+            kind: ctx.tara.intern(Typekind::Func { args, ret }),
+            loc,
+        };
+        // ctx.unify(func, unapp);
+        unify!(ctx, func, unapp);
+        Ok(typ)
+    }
+}
+
+impl expr::Builtinkind {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let int_k = ctx.tara.intern(Typekind::Int);
+        let bool_k = ctx.tara.intern(Typekind::Bool);
+        let string_k = ctx.tara.intern(Typekind::String);
+        let int2_k = ctx.tara.tuple(Rc::new([int_k; 2]));
+        let int7_k = ctx.tara.tuple(Rc::new([int_k; 7]));
+        let mut func = |args, ret| Type {
+            kind: ctx.tara.intern(Typekind::Func { args, ret }),
+            loc,
+        };
+        Ok(match self {
+            expr::Builtinkind::Add
+            | expr::Builtinkind::Sub
+            | expr::Builtinkind::Mul
+            | expr::Builtinkind::Div
+            | expr::Builtinkind::Mod
+            | expr::Builtinkind::And
+            | expr::Builtinkind::Or
+            | expr::Builtinkind::Xor
+            | expr::Builtinkind::ShLeft
+            | expr::Builtinkind::ShRight => func(int2_k, int_k),
+            expr::Builtinkind::Not | expr::Builtinkind::Negate => func(int_k, int_k),
+            expr::Builtinkind::CmpEq
+            | expr::Builtinkind::CmpNE
+            | expr::Builtinkind::CmpGt
+            | expr::Builtinkind::CmpLt
+            | expr::Builtinkind::CmpGE
+            | expr::Builtinkind::CmpLE => func(int2_k, bool_k),
+            expr::Builtinkind::Syscall => func(int7_k, int_k),
+            expr::Builtinkind::PtrToInt => func(string_k, int_k),
+            expr::Builtinkind::IntToPtr => func(int_k, string_k),
+        })
+    }
+}
+
+impl expr::Tuple {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let mut fields = Vec::with_capacity(self.0.len());
+        for &e in self.0.cheap().iter() {
+            fields.push(e.typecheck(ctx)?.kind);
+        }
+        Ok(Type {
+            kind: ctx.tara.tuple(fields.into()),
+            loc,
+        })
+    }
+}
+
+impl expr::Loop {
+    pub(super) fn typecheck(
+        &self,
+        _: Provenance,
+        typ: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        if Err(ControlFlow::Return) == self.0.typecheck(ctx) {
+            return Err(ControlFlow::Return);
+        }
+        Ok(typ)
+    }
+}
+
+impl expr::Bareblock {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let mut t = Type {
+            kind: ctx.tara.unit(),
+            loc,
+        };
+        for &e in self.0.cheap().iter() {
+            t = e.typecheck(ctx)?;
+        }
+        Ok(t)
+    }
+}
+
+impl expr::Recall {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        match self.1.expect("resolution shoulda done this") {
+            Left(bid) => Ok(ctx[bid].typ),
+            Right(id) if id == ctx.owner.into() => Ok(ctx.tara.quir_items[ctx.owner].typ),
+            Right(id) => Ok(match ctx.tara.fill(fill::In { i: id }).typ {
+                Some(t) => t,
+                None => {
+                    ctx.tara.report(
+                        message!(
+                            error @ loc
+                                => "Expected a term, but name '{}' does not refer to one!", self.0.last().unwrap().name.0,
+                        ),
+                        &[message!(
+                            note @ ctx.tara.quir_items[id].loc()
+                                => "Name declared here!"
+                        )],
+                        );
+                    todo!("poisoning")
+                }
+            }),
+            // Right(id) => Ok(match ctx.tara.quir_items[id] {
+            //     quir::Item::Typecase(ref c) => c.typ,
+            //     quir::Item::Function(ref f) => f.typ,
+            //     quir::Item::Typedecl(ref t) => {
+            //         ctx.tara.report(
+            //             message!(
+            //                 error @ loc
+            //                     => "Name '{}' refers to a type, but a term was expected!", t.name.name.0
+            //             ),
+            //             &[
+            //                 message!(note @ t.loc => "Type defined here!")
+            //             ]
+            //         );
+            //         todo!("poisoning")
+            //     }
+            //     quir::Item::Namespace(_) => {
+            //         ctx.tara.report(
+            //             message!(
+            //                 error @ loc
+            //                     => "The following path refers to a namespace, while a term was expected!"
+            //             ),
+            //             &[
+            //                 message!(note => "Was a part of that path lost?"),
+            //             ]
+            //         );
+            //         todo!("poisoning")
+            //     }
+            // }),
+        }
+    }
+}
+
+impl expr::Number {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        Ok(Type {
+            kind: ctx.tara.intern(Typekind::Int),
+            loc,
+        })
+    }
+}
+
+impl expr::String {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        Ok(Type {
+            kind: ctx.tara.intern(Typekind::String),
+            loc,
+        })
+    }
+}
+
+impl expr::Bool {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        Ok(Type {
+            kind: ctx.tara.intern(Typekind::Bool),
+            loc,
+        })
+    }
+}
+
+impl expr::Arguments {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let t = ctx.tara.quir_items[ctx.owner].typ.kind;
+        let Typekind::Func { args: t, .. } = ctx.tara.quir_types[t] else {
+            panic!("expr::Arguments outside of a function??")
+        };
+        Ok(Type { kind: t, loc })
+    }
+}
+
+impl expr::Poison {
+    pub(super) fn typecheck(
+        &self,
+        _: Provenance,
+        _: Type,
+        _: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        std::process::exit(1);
+    }
+}
+
+impl expr::Let {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let ty = self.1.typecheck(ctx)?;
+        // ctx.unify(ty, ctx[self.0].typ);
+        unify!(ctx, ty, ctx[self.0].typ);
+        Ok(Type {
+            kind: ctx.tara.unit(),
+            loc,
+        })
+    }
+}
+
+impl expr::Assign {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let bid = self.1.expect("resolve should've done this");
+        let quir::binding::Kind::Name(n) = ctx[bid].kind else {
+            panic!("this shouldn't be parseable yet!")
+        };
+        if !n.1 {
+            ctx.tara.report(
+                message!(error @ loc => "Cannot reassign an immutable variable!"),
+                &[message!( note @ ctx[bid].loc => "'{}' is declared here!", n.0.0)],
+            );
+            todo!("poisoning")
+        }
+        let ty = self.2.typecheck(ctx)?;
+        // ctx.unify(ty, ctx[bid].typ);
+        unify!(ctx, ty, ctx[bid].typ);
+        Ok(Type {
+            kind: ctx.tara.unit(),
+            loc,
+        })
+    }
+}
+
+impl expr::Break {
+    pub(super) fn typecheck(
+        &self,
+        _: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let target = self.target.expect("resolve should've done this");
+        let ty = self.val.typecheck(ctx)?;
+        // ctx.unify(ty, ctx[target].typ);
+        unify!(ctx, ty, ctx[target].typ);
+        Err(ControlFlow::Break)
+    }
+}
+
+impl expr::Return {
+    pub(super) fn typecheck(
+        &self,
+        _: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        let ret = ctx.tara.quir_items[ctx.owner].typ.kind;
+        let Typekind::Func { ret, .. } = ctx.tara.quir_types[ret] else {
+            panic!("non-func-typed function?")
+        };
+        let ret = Type {
+            loc: ctx.tara.quir_items[ctx.owner].typ.loc,
+            kind: ret,
+        };
+        let ty = self.0.typecheck(ctx)?;
+        // ctx.unify(ret, ty);
+        unify!(ctx, ret, ty);
+        Err(ControlFlow::Return)
+    }
+}
+
+impl expr::Const {
+    pub(super) fn typecheck(
+        &self,
+        loc: Provenance,
+        _: Type,
+        ctx: &mut Ctx,
+    ) -> Result<Type, ControlFlow> {
+        self.0.typecheck(ctx)?;
+        Ok(Type {
+            kind: ctx.tara.unit(),
+            loc,
+        })
     }
 }
 
 fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, TypeId> {
     let mut out = Map::new();
-    while let Some(Constraint::Unify(a, b)) = cs.pop() {
-        match (&tara.uir_types[a.kind], &tara.uir_types[b.kind]) {
+    while let Some(Constraint::Unify(line_nr, a, b)) = cs.pop() {
+        match (&tara.quir_types[a.kind], &tara.quir_types[b.kind]) {
             (Typekind::Var(a), _) => {
                 out.insert(*a, b.kind);
-                substitute(&mut cs, &mut tara.uir_types, &out);
+                substitute(&mut cs, &out, tara);
             }
             (_, Typekind::Var(b)) => {
                 out.insert(*b, a.kind);
-                substitute(&mut cs, &mut tara.uir_types, &out);
+                substitute(&mut cs, &out, tara);
             }
             (Typekind::Bundle(ref ks_a), Typekind::Bundle(ref ks_b)) => {
                 for (&k_a, &k_b) in ks_a.clone().iter().zip(ks_b.clone().iter()) {
                     cs.push(Constraint::Unify(
+                        line_nr,
                         Type {
                             kind: k_a,
                             loc: a.loc,
@@ -256,6 +516,7 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
             }
             (Typekind::Call { args: a1, func: f1 }, Typekind::Call { args: a2, func: f2 }) => {
                 cs.push(Constraint::Unify(
+                    line_nr,
                     Type {
                         kind: *f1,
                         loc: a.loc,
@@ -266,6 +527,7 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
                     },
                 ));
                 cs.push(Constraint::Unify(
+                    line_nr,
                     Type {
                         kind: *a1,
                         loc: a.loc,
@@ -278,6 +540,7 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
             }
             (Typekind::Func { args: a1, ret: r1 }, Typekind::Func { args: a2, ret: r2 }) => {
                 cs.push(Constraint::Unify(
+                    line_nr,
                     Type {
                         kind: *a1,
                         loc: a.loc,
@@ -288,6 +551,7 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
                     },
                 ));
                 cs.push(Constraint::Unify(
+                    line_nr,
                     Type {
                         kind: *r1,
                         loc: a.loc,
@@ -300,22 +564,22 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
             }
             (ref a_k, ref b_k) if a_k == b_k => {}
             (ref a_k, ref b_k) if a_k != b_k => {
-                dbg!(a, b);
+                dbg!(&tara.quir_types[a.kind], &tara.quir_types[b.kind]);
+                println!("CODE #{}", line_nr);
                 tara.report(
                     message!(error => "Could not unify types!"),
                     &[
                         message!(
                             note @ a.loc =>
-                            "Type '{}' originates here:", a.fmt(&tara.uir_interfaces, &tara.uir_types)
+                            "Type '{}' originates here:", a.fmt(tara)
                         ),
                         message!(
                             note @ b.loc =>
-                            "Type '{}' originates here:", b.fmt(&tara.uir_interfaces, &tara.uir_types)
+                            "Type '{}' originates here:", b.fmt(tara)
                         ),
                     ],
                 );
-                // TODO: poisoning or smt
-                std::process::exit(1);
+                todo!("poisoning or smt")
             }
             _ => unreachable!(),
         }
@@ -323,17 +587,39 @@ fn solve_constraints(mut cs: Vec<Constraint>, tara: &mut Tara) -> Map<usize, Typ
     out
 }
 
-fn substitute(
-    cs: &mut [Constraint],
-    typevec: &mut Ivec<uir::TypeId, Typekind>,
-    map: &Map<usize, TypeId>,
-) {
+fn substitute(cs: &mut [Constraint], map: &Map<usize, TypeId>, tara: &mut Tara) {
     for c in cs.iter_mut() {
         match c {
-            Constraint::Unify(a, b) => {
-                a.kind.replace(typevec, map);
-                b.kind.replace(typevec, map);
+            Constraint::Unify(_, a, b) => {
+                tara.replace(a.kind, map);
+                tara.replace(b.kind, map);
             }
+        }
+    }
+}
+
+impl Tara {
+    pub fn replace(&mut self, id: TypeId, map: &Map<usize, TypeId>) {
+        match self.quir_types[id] {
+            Typekind::Func { args, ret } => {
+                self.replace(args, map);
+                self.replace(ret, map);
+            }
+            Typekind::Call { args, func } => {
+                self.replace(func, map);
+                self.replace(args, map);
+            }
+            Typekind::Bundle(ref ids) => {
+                for &k in ids.cheap().iter() {
+                    self.replace(k, map);
+                }
+            }
+            Typekind::Var(v) => {
+                if let Some(t) = map.get(&v) {
+                    self.quir_types[id] = self.quir_types[*t].cheap();
+                }
+            }
+            _ => {}
         }
     }
 }

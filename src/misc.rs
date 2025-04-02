@@ -6,6 +6,7 @@ pub trait CheapClone: Clone {
     }
 }
 impl<T: ?Sized> CheapClone for std::rc::Rc<T> {}
+impl<T: CheapClone> CheapClone for Option<T> {}
 
 #[derive(Debug)]
 pub struct Svec<K, V> {
@@ -145,7 +146,7 @@ macro_rules! MkIndexer {
                 value.0.try_into().unwrap()
             }
         }
-        impl Indexer for $name {}
+        impl $crate::misc::Indexer for $name {}
     };
 }
 
@@ -199,5 +200,93 @@ impl std::ops::Deref for Istr {
 
     fn deref(&self) -> &Self::Target {
         self.0
+    }
+}
+
+#[macro_export]
+macro_rules! CommonEnum {
+    (
+        $(# $attr:tt)?
+        $ve:vis enum $name:ident {
+            $($case:ident : $body:ty),+
+            $(,)?
+        }
+        $($fns:tt)*
+    ) => {
+        $(#$attr)?
+        $ve enum $name {
+            $($case($body)),+
+        }
+        $(impl From<$body> for $name {
+            fn from(v: $body) -> $name {
+                Self:: $case (v)
+            }
+        })+
+        impl $name {
+            CommonEnum! {
+                impl { $($case : $body),+ }
+                $($fns)*
+            }
+        }
+    };
+    (
+        impl { $($case:ident : $body:ty),+ }
+        $v:vis self.$fn:ident( $($n:ident : $t:ty),* )
+        -> $out:ty;
+        $($fns:tt)*
+    ) => {
+        $v fn $fn(self, $($n : $t),*) -> $out {
+            CommonEnum! {
+                match { $($case : $body),+ }
+                self.$fn( $($n),* )
+            }
+        }
+        CommonEnum! {
+            impl { $($case : $body),+ }
+            $($fns)*
+        }
+    };
+    (
+        impl { $($case:ident : $body:ty),+ }
+        $v:vis &self.$fn:ident( $($n:ident : $t:ty),* )
+        -> $out:ty;
+        $($fns:tt)*
+    ) => {
+        $v fn $fn(&self, $($n : $t),*) -> $out {
+            CommonEnum! {
+                match { $($case : $body),+ }
+                self.$fn( $($n),* )
+            }
+        }
+        CommonEnum! {
+            impl { $($case : $body),+ }
+            $($fns)*
+        }
+    };
+    (
+        impl { $($case:ident : $body:ty),+ }
+        $v:vis &mut self.$fn:ident( $($n:ident : $t:ty),* )
+        -> $out:ty;
+        $($fns:tt)*
+    ) => {
+        $v fn $fn(&mut self, $($n : $t),*) -> $out {
+            CommonEnum! {
+                match { $($case : $body),+ }
+                self.$fn( $($n),* )
+            }
+        }
+        CommonEnum! {
+            impl { $($case : $body),+ }
+            $($fns)*
+        }
+    };
+    (impl { $($case:ident : $body:ty),+ }) => {};
+    (
+        match { $($case:ident : $body:ty),+ }
+        $this:ident.$fn:ident $args:tt
+    ) => {
+        match $this {$(
+            Self:: $case(c) => c.$fn $args
+        ),+}
     }
 }

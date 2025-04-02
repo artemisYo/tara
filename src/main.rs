@@ -274,25 +274,27 @@ fn main() {
 
     dbg!(ctx.parse(parse::In { m: ctx.entry }).ast);
 
-    let resolution = ctx.resolve(uir::In { m: ctx.entry });
-    let mut _start = None;
-    for &i in resolution.items.iter() {
-        if let uir::Item::Function(f) = &ctx.uir_items[i] {
-            println!(
-                "{}",
-                f.fmt(
-                    &ctx.uir_interfaces[i].into_func_immut(),
-                    &ctx.uir_locals[i],
-                    &ctx.uir_interfaces,
-                    &ctx.uir_types,
-                    &ctx.uir_items,
-                )
-            );
-        }
-        if ctx.item_name(i).name.0 == "_start" {
-            _start = Some(i);
-        }
-    }
+    // let resolution = ctx.lower_uir(uir::In { m: ctx.entry });
+    let items = ctx.quir(quir::In { m: ctx.entry }).namespace;
+    let _start = ctx.quir_items[items].items.get(&"_start".into()).copied();
+    // let mut _start = None;
+    // for &i in ctx.quir_items[items].items.values() {
+    //     if let uir::Item::Function(f) = &ctx.uir_items[i] {
+    //         println!(
+    //             "{}",
+    //             f.fmt(
+    //                 &ctx.uir_interfaces[i].into_func_immut(),
+    //                 &ctx.uir_locals[i],
+    //                 &ctx.uir_interfaces,
+    //                 &ctx.uir_types,
+    //                 &ctx.uir_items,
+    //             )
+    //         );
+    //     }
+    //     if ctx.item_name(i).name.0 == "_start" {
+    //         _start = Some(i);
+    //     }
+    // }
 
     ctx.codegen(codegen::In { i: _start.unwrap() });
     match ctx.llvm_mod.verify() {

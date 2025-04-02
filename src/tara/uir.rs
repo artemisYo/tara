@@ -2,9 +2,7 @@ use std::rc::Rc;
 
 use super::{parse::Ident, preimport, Module, ModuleId, Tara};
 use crate::{
-    message,
-    misc::{CheapClone, Indexer, Istr, Ivec, Svec},
-    parse, MkIndexer, Provenance,
+    gen_query, message, misc::{CheapClone, Istr, Ivec, Svec}, parse, MkIndexer, Provenance
 };
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -16,21 +14,7 @@ pub struct In {
 pub struct Out {
     pub items: Rc<[Id]>,
 }
-
-impl Tara {
-    pub fn resolve(&mut self, i: In) -> Out {
-        match self.resolution.get(&i) {
-            Some(Some(o)) => o.clone(),
-            Some(None) => panic!("resolution entered a cycle!"),
-            None => {
-                self.resolution.insert(i, None);
-                let data = resolve(self, i);
-                self.resolution.insert(i, Some(data));
-                self.resolution.get(&i).cloned().unwrap().unwrap()
-            }
-        }
-    }
-}
+impl CheapClone for Out {}
 
 MkIndexer!(pub Id, u32);
 impl Id {
@@ -823,12 +807,13 @@ pub enum Bindkind {
     Tuple(Rc<[BindingId]>),
 }
 
-fn resolve(tara: &mut Tara, i: In) -> Out {
+gen_query!(lower_uir);
+fn lower_uir(tara: &mut Tara, i: In) -> Out {
     let imports = tara.preimport(preimport::In { m: i.m }).imports;
     let ast = tara.parse(parse::In { m: i.m });
     let mut globals = Svec::default();
     for i in imports.iter() {
-        let items = tara.resolve(In { m: i.target }).items;
+        let items = tara.lower_uir(In { m: i.target }).items;
         if let Some(decl) = i.head {
             for &id in items.iter() {
                 if tara.item_name(id).name != decl {
@@ -939,7 +924,7 @@ impl parse::Typedecl {
         let loc = self.loc;
         TypedeclInter { loc, name }
     }
-    fn convert(&self, id: TypedeclId, globals: &Svec<Istr, Id>, tara: &mut Tara) -> Typedecl {
+    fn uir_convert(&self, id: TypedeclId, globals: &Svec<Istr, Id>, tara: &mut Tara) -> Typedecl {
         let mut cases = Vec::with_capacity(self.cases.len());
         for (index, case) in self.cases.iter().enumerate() {
             let locals = LocalVec::default();
@@ -1001,7 +986,7 @@ impl parse::Function {
         FunctionInter { loc, typ, name }
     }
 
-    fn convert(
+    fn uir_convert(
         &self,
         id: Id,
         globals: &Svec<Istr, Id>,
@@ -1152,12 +1137,12 @@ pub trait BindingCtxT<'a> {
 }
 
 pub trait BindingT: std::fmt::Debug {
-    fn convert(&self, _: Provenance, mutable: bool, _: &mut dyn BindingCtxT) -> BindingId;
+    fn uir_convert(&self, _: Provenance, mutable: bool, _: &mut dyn BindingCtxT) -> BindingId;
     fn typing(&self, _: Provenance, _: &Svec<Istr, Id>, _: &mut Tara) -> Type;
 }
 
 impl parse::Binding {
-    pub fn convert(&self, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+    pub fn uir_convert(&self, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
         self.kind.convert(self.loc, mutable, ctx)
     }
     pub fn typing(&self, globals: &Svec<Istr, Id>, ctx: &mut Tara) -> Type {
@@ -1169,7 +1154,7 @@ impl BindingT for parse::binding::Empty {
     fn typing(&self, loc: Provenance, _: &Svec<Istr, Id>, ctx: &mut Tara) -> Type {
         Type::unit(&mut ctx.uir_types, loc)
     }
-    fn convert(&self, loc: Provenance, _: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+    fn uir_convert(&self, loc: Provenance, _: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
         let typ = Type {
             kind: ctx.empty_type(),
             loc,
@@ -1195,7 +1180,7 @@ impl BindingT for parse::binding::Name {
             }
         }
     }
-    fn convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+    fn uir_convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
         let typ = match self.1 {
             Some(ref t) => t.convert(ctx.globals(), ctx.tara()),
             None => match ctx.no_type() {
@@ -1227,7 +1212,7 @@ impl BindingT for parse::binding::Tuple {
         let ts: Vec<_> = self.0.iter().map(|b| b.typing(globals, ctx)).collect();
         Type::tup(&mut ctx.uir_types, &ts, loc)
     }
-    fn convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
+    fn uir_convert(&self, loc: Provenance, mutable: bool, ctx: &mut dyn BindingCtxT) -> BindingId {
         let (ts, bs): (Vec<_>, Vec<_>) = self
             .0
             .iter()
@@ -1246,17 +1231,17 @@ impl BindingT for parse::binding::Tuple {
 }
 
 pub trait ExprT: std::fmt::Debug {
-    fn convert(&self, _: Provenance, _: &mut Ectx) -> ExprId;
+    fn uir_convert(&self, _: Provenance, _: &mut Ectx) -> ExprId;
 }
 
 impl parse::Expr {
-    pub fn convert(&self, ctx: &mut Ectx) -> ExprId {
+    pub fn uir_convert(&self, ctx: &mut Ectx) -> ExprId {
         self.kind.convert(self.loc, ctx)
     }
 }
 
 impl ExprT for parse::expr::If {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let cond = self.cond.convert(ctx);
         let smash = self.smash.convert(ctx);
         let pass = self.pass.convert(ctx);
@@ -1270,7 +1255,7 @@ impl ExprT for parse::expr::If {
 }
 
 impl ExprT for parse::expr::Call {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let func = self.func.convert(ctx);
         let args = self.args.convert(ctx);
         let typ = Type {
@@ -1286,7 +1271,7 @@ impl ExprT for parse::expr::Call {
 }
 
 impl ExprT for parse::expr::Tuple {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let (types, exprs): (Vec<_>, Vec<_>) = self
             .0
             .iter()
@@ -1305,7 +1290,7 @@ impl ExprT for parse::expr::Tuple {
 }
 
 impl ExprT for parse::expr::Loop {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let slot = Expr {
             typ: Type::unit(&mut ctx.tara.uir_types, loc),
             kind: Exprkind::default(),
@@ -1329,7 +1314,7 @@ impl ExprT for parse::expr::Loop {
 }
 
 impl ExprT for parse::expr::Bareblock {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let exprs: Vec<_> = self.0.iter().map(|e| e.convert(ctx)).collect();
         let typ = exprs
             .last()
@@ -1347,7 +1332,7 @@ impl ExprT for parse::expr::Bareblock {
 }
 
 impl ExprT for parse::expr::Recall {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         for &builtin in Builtinkind::VALUES {
             if builtin.spelling() == self.0 .0 {
                 let typ = Type {
@@ -1390,7 +1375,7 @@ impl ExprT for parse::expr::Recall {
 }
 
 impl ExprT for parse::expr::Path {
-    fn convert(&self, old_loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, old_loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let poison = |ctx: &mut Ectx| {
             let typ = Type {
                 kind: ctx.tara.new_typevar(),
@@ -1461,7 +1446,7 @@ impl ExprT for parse::expr::Path {
 }
 
 impl ExprT for parse::expr::Number {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::Int, loc);
         ctx.locals().push_expr(Expr {
             kind: Exprkind::Number(self.0),
@@ -1472,7 +1457,7 @@ impl ExprT for parse::expr::Number {
 }
 
 impl ExprT for parse::expr::String {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::String, loc);
         ctx.locals().push_expr(Expr {
             kind: Exprkind::String(self.0),
@@ -1483,7 +1468,7 @@ impl ExprT for parse::expr::String {
 }
 
 impl ExprT for parse::expr::Bool {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::simple(&mut ctx.tara.uir_types, Typekind::Bool, loc);
         ctx.locals().push_expr(Expr {
             kind: Exprkind::Bool(self.0),
@@ -1494,7 +1479,7 @@ impl ExprT for parse::expr::Bool {
 }
 
 impl ExprT for parse::expr::Let {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let binding = self.0.convert(false, ctx);
         let expr = self.1.convert(ctx);
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
@@ -1507,7 +1492,7 @@ impl ExprT for parse::expr::Let {
 }
 
 impl ExprT for parse::expr::Mut {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let binding = self.0.convert(true, ctx);
         let expr = self.1.convert(ctx);
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
@@ -1520,7 +1505,7 @@ impl ExprT for parse::expr::Mut {
 }
 
 impl ExprT for parse::expr::Assign {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
         let kind = match ctx.names.find(&self.0.name) {
             Some(bid) => {
@@ -1542,7 +1527,7 @@ impl ExprT for parse::expr::Assign {
 }
 
 impl ExprT for parse::expr::Break {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
         let kind = match ctx.loops.last() {
             Some(&target) => {
@@ -1571,7 +1556,7 @@ impl ExprT for parse::expr::Break {
 }
 
 impl ExprT for parse::expr::Return {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
         let kind = match self.0 {
             None => Exprkind::default(),
@@ -1582,7 +1567,7 @@ impl ExprT for parse::expr::Return {
 }
 
 impl ExprT for parse::expr::Const {
-    fn convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
+    fn uir_convert(&self, loc: Provenance, ctx: &mut Ectx) -> ExprId {
         let typ = Type::unit(&mut ctx.tara.uir_types, loc);
         let kind = Exprkind::Const(self.0.convert(ctx));
         ctx.locals().push_expr(Expr { kind, typ, loc })
@@ -1590,7 +1575,7 @@ impl ExprT for parse::expr::Const {
 }
 
 impl parse::Type {
-    fn convert(&self, globals: &Svec<Istr, Id>, tara: &mut Tara) -> Type {
+    fn uir_convert(&self, globals: &Svec<Istr, Id>, tara: &mut Tara) -> Type {
         match &self.kind {
             parse::Typekind::Func { args, ret } => {
                 let args = args.convert(globals, tara);

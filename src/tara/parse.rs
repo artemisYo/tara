@@ -2,40 +2,24 @@ use std::fmt::Write;
 use std::rc::Rc;
 
 use crate::{
-    message,
-    misc::Istr,
+    gen_query, message,
+    misc::{CheapClone, Istr},
     preimport, prescan,
     tokens::{Token, Tokenkind},
     FmtMessage, Provenance,
 };
 
-use super::{prescan::Opdef, uir, ModuleId, Tara};
+use super::{prescan::Opdef, ModuleId, Tara};
 
 #[derive(Clone, Debug)]
 pub struct Out {
     pub ast: Rc<Ast>,
 }
+impl CheapClone for Out {}
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct In {
     pub m: ModuleId,
-}
-
-impl Tara {
-    pub fn parse(&mut self, i: In) -> Out {
-        match self.parses.get(&i) {
-            Some(Some(o)) => o.clone(),
-            Some(None) => panic!("parse entered a cycle!"),
-            None => {
-                // 'reserve' the spot, so that if the key is ever seen again,
-                // we know it's a cycle
-                self.parses.insert(i, None);
-                let data = parse(self, i);
-                self.parses.insert(i, Some(data));
-                self.parses.get(&i).cloned().unwrap().unwrap()
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -108,76 +92,113 @@ impl Default for Typekind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Binding {
     pub loc: Provenance,
-    pub kind: Box<dyn uir::BindingT>,
+    // pub kind: Box<dyn uir::BindingT>,
+    pub kind: binding::Kind,
 }
 
 pub mod binding {
     use super::*;
+    use crate::{quir, CommonEnum};
 
-    #[derive(Debug)]
+    CommonEnum! {
+        #[derive(Debug, Clone)]
+        pub enum Kind {
+            Empty: Empty,
+            Name: Name,
+            Tuple: Tuple,
+        }
+        pub(in crate::tara) &self.convert(mutable: bool, loc: Provenance, ctx: &mut dyn quir::Ctx) -> quir::BindingId;
+    }
+
+    #[derive(Debug, Clone)]
     pub struct Empty;
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Name(pub Istr, pub Option<Type>);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Tuple(pub Vec<Binding>);
 }
 
 #[derive(Clone, Debug)]
 pub struct Expr {
     pub loc: Provenance,
-    pub kind: Rc<dyn uir::ExprT>,
+    // pub kind: Rc<dyn uir::ExprT>,
+    pub kind: expr::Exprkind,
 }
 
 pub mod expr {
     use super::*;
-    #[derive(Debug)]
+    use crate::{quir, CommonEnum};
+
+    CommonEnum! {
+        #[derive(Debug, Clone)]
+        pub enum Exprkind {
+            If: Box<If>,
+            Call: Box<Call>,
+            Tuple: Box<Tuple>,
+            Loop: Box<Loop>,
+            Bareblock: Box<Bareblock>,
+            Path: Box<Path>,
+            Number: Box<Number>,
+            String: Box<String>,
+            Bool: Box<Bool>,
+            Let: Box<Let>,
+            Mut: Box<Mut>,
+            Assign: Box<Assign>,
+            Break: Box<Break>,
+            Return: Box<Return>,
+            Const: Box<Const>,
+        }
+
+        pub(in crate::tara) &self.convert(loc: Provenance, ctx: &mut quir::ECtx) -> quir::ExprId;
+    }
+
+    #[derive(Debug, Clone)]
     pub struct If {
         pub cond: Expr,
         pub smash: Expr,
         pub pass: Expr,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Call {
         pub func: Expr,
         pub args: Expr,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Tuple(pub Vec<Expr>);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Loop(pub Expr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Bareblock(pub Vec<Expr>);
 
-    #[derive(Debug)]
-    pub struct Recall(pub Istr);
-    #[derive(Debug)]
-    pub struct Path(pub Vec<Ident>);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
+    pub struct Path(pub Rc<[Ident]>);
+    #[derive(Debug, Clone)]
     pub struct Number(pub Istr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct String(pub Istr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Bool(pub Istr);
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Let(pub Binding, pub Expr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Mut(pub Binding, pub Expr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Assign(pub Ident, pub Expr);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Break(pub Option<Expr>);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Return(pub Option<Expr>);
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Const(pub Expr);
 }
 
+gen_query!(parse);
 fn parse(ctx: &mut Tara, i: In) -> Out {
     let pp = ctx.prescan(prescan::In { m: i.m });
     let pi = ctx.preimport(preimport::In { m: i.m });
@@ -389,7 +410,7 @@ impl Parser<'_> {
         };
         Binding {
             loc,
-            kind: Box::new(binding::Name(name.text, typ)),
+            kind: binding::Name(name.text, typ).into(),
         }
     }
 
@@ -406,12 +427,12 @@ impl Parser<'_> {
         match fields.len() {
             0 => Binding {
                 loc,
-                kind: Box::new(binding::Empty),
+                kind: binding::Empty.into(),
             },
             1 => fields.pop().unwrap(),
             _ => Binding {
                 loc,
-                kind: Box::new(binding::Tuple(fields)),
+                kind: binding::Tuple(fields).into(),
             },
         }
     }
@@ -651,13 +672,13 @@ impl Parser<'_> {
         } else {
             Expr {
                 loc: smash.loc,
-                kind: Rc::new(expr::Tuple(vec![])),
+                kind: Box::new(expr::Tuple(vec![])).into(),
             }
         };
         let loc = loc.meet(&pass.loc);
         Expr {
             loc,
-            kind: Rc::new(expr::If { cond, smash, pass }),
+            kind: Box::new(expr::If { cond, smash, pass }).into(),
         }
     }
 
@@ -667,7 +688,7 @@ impl Parser<'_> {
         let loc = loc.meet(&body.loc);
         Expr {
             loc,
-            kind: Rc::new(expr::Loop(body)),
+            kind: Box::new(expr::Loop(body)).into(),
         }
     }
 
@@ -679,7 +700,7 @@ impl Parser<'_> {
             if let Some(t) = self.check(Tokenkind::Semicolon) {
                 body.push(Expr {
                     loc: t.loc,
-                    kind: Rc::new(expr::Const(e)),
+                    kind: Box::new(expr::Const(e)).into(),
                 });
             } else {
                 body.push(e);
@@ -696,7 +717,7 @@ impl Parser<'_> {
         );
         Expr {
             loc,
-            kind: Rc::new(expr::Bareblock(body)),
+            kind: Box::new(expr::Bareblock(body)).into(),
         }
     }
 
@@ -735,15 +756,20 @@ impl Parser<'_> {
             }
             if let Some(t) = self.check_text(o.spelling) {
                 let args = self.expr_op(o.rbp.unwrap().get());
+                let path = Rc::new([Ident {
+                    name: t.text,
+                    loc: t.loc,
+                }]);
                 return Expr {
                     loc: t.loc.meet(&args.loc),
-                    kind: Rc::new(expr::Call {
+                    kind: Box::new(expr::Call {
                         func: Expr {
                             loc: t.loc,
-                            kind: Rc::new(expr::Recall(t.text)),
+                            kind: Box::new(expr::Path(path)).into(),
                         },
                         args,
-                    }),
+                    })
+                    .into(),
                 };
             }
         }
@@ -771,7 +797,7 @@ impl Parser<'_> {
             let args = self.expr_parenthesised();
             return Expr {
                 loc: left.loc.meet(&args.loc),
-                kind: Rc::new(expr::Call { func: left, args }),
+                kind: Box::new(expr::Call { func: left, args }).into(),
             };
         }
         for o in self.ops.clone().iter() {
@@ -783,20 +809,25 @@ impl Parser<'_> {
                     let right = self.expr_op(rbp.get());
                     Expr {
                         loc: left.loc.meet(&right.loc),
-                        kind: Rc::new(expr::Tuple(vec![left, right])),
+                        kind: Box::new(expr::Tuple(vec![left, right])).into(),
                     }
                 } else {
                     left
                 };
+                let path = Rc::new([Ident {
+                    name: t.text,
+                    loc: t.loc,
+                }]);
                 return Expr {
                     loc: args.loc.meet(&t.loc),
-                    kind: Rc::new(expr::Call {
+                    kind: Box::new(expr::Call {
                         func: Expr {
                             loc: t.loc,
-                            kind: Rc::new(expr::Recall(t.text)),
+                            kind: Box::new(expr::Path(path)).into(),
                         },
                         args,
-                    }),
+                    })
+                    .into(),
                 };
             }
         }
@@ -824,10 +855,7 @@ impl Parser<'_> {
                     loc = loc.meet(&part.loc);
                 }
                 Expr {
-                    kind: match names.len() {
-                        1 => Rc::new(expr::Recall(names[0].name)),
-                        _ => Rc::new(expr::Path(names)),
-                    },
+                    kind: Box::new(expr::Path(names.into())).into(),
                     loc,
                 }
             }
@@ -835,21 +863,21 @@ impl Parser<'_> {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Rc::new(expr::Number(t.text)),
+                    kind: Box::new(expr::Number(t.text)).into(),
                 }
             }
             Some(String) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Rc::new(expr::String(t.text)),
+                    kind: Box::new(expr::String(t.text)).into(),
                 }
             }
             Some(Bool) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Rc::new(expr::Bool(t.text)),
+                    kind: Box::new(expr::Bool(t.text)).into(),
                 }
             }
             _ => {
@@ -887,7 +915,7 @@ impl Parser<'_> {
             1 => fields.pop().unwrap(),
             _ => Expr {
                 loc,
-                kind: Rc::new(expr::Tuple(fields)),
+                kind: Box::new(expr::Tuple(fields)).into(),
             },
         }
     }
@@ -924,7 +952,7 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Rc::new(expr::Let(binding, init)),
+            kind: Box::new(expr::Let(binding, init)).into(),
         }
     }
 
@@ -936,7 +964,7 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Rc::new(expr::Mut(binding, init)),
+            kind: Box::new(expr::Mut(binding, init)).into(),
         }
     }
 
@@ -950,7 +978,7 @@ impl Parser<'_> {
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Rc::new(expr::Break(val)),
+            kind: Box::new(expr::Break(val)).into(),
         }
     }
 
@@ -964,7 +992,7 @@ impl Parser<'_> {
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Rc::new(expr::Return(val)),
+            kind: Box::new(expr::Return(val)).into(),
         }
     }
 
@@ -980,7 +1008,7 @@ impl Parser<'_> {
         };
         Expr {
             loc,
-            kind: Rc::new(expr::Assign(name, val)),
+            kind: Box::new(expr::Assign(name, val)).into(),
         }
     }
 

@@ -1,3 +1,4 @@
+use either::Either::{Left, Right};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
@@ -11,12 +12,15 @@ use inkwell::{
 use std::{collections::BTreeMap as Map, rc::Rc};
 
 use crate::{
-    fill,
+    fill, gen_query,
     misc::{CheapClone, Istr},
 };
 
 use super::{
-    uir::{self, ExprId, FuncId, TypecaseId, TypedeclId},
+    quir::{
+        self, binding, expr, Binding, BindingId, Expr, ExprId, FunctionId, Type, TypecaseId,
+        TypedeclId, Typekind,
+    },
     Tara,
 };
 
@@ -26,43 +30,30 @@ pub enum Out {
     Func(FunctionValue<'static>),
     Namespace(Rc<[Out]>),
 }
+impl CheapClone for Out {}
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct In {
-    pub i: uir::Id,
-}
-
-impl Tara {
-    pub fn codegen(&mut self, i: In) -> Out {
-        match self.codegen.get(&i) {
-            Some(Some(o)) => o.clone(),
-            Some(None) => panic!("codegen entered a cycle!"),
-            None => {
-                self.codegen.insert(i, None);
-                let data = codegen(self, i);
-                self.codegen.insert(i, Some(data));
-                self.codegen.get(&i).cloned().unwrap().unwrap()
-            }
-        }
-    }
+    pub i: quir::Id,
 }
 
 #[derive(PartialEq, Eq)]
-enum Control {
+pub enum Control {
     Break,
     Return,
 }
 
-type Result = std::result::Result<AnyValueEnum<'static>, Control>;
+pub type Result = std::result::Result<AnyValueEnum<'static>, Control>;
 
-fn codegen(tara: &mut Tara, i: In) -> Out {
-    tara.fill(fill::In { i: i.i });
-    match tara.uir_items[i.i] {
-        uir::Item::Typecase(_) => typecases(i.i.into_typecase(), tara),
-        uir::Item::Typedecl(_) => typedecls(i.i.into_typedecl(), tara),
-        uir::Item::Function(_) => functions(i.i.into_func(), tara),
-        uir::Item::Namespace(_) => {
-            let is = tara.uir_interfaces[i.i].into_namespace().items.clone();
+gen_query!(codegen);
+fn codegen(tara: &mut Tara, In { i }: In) -> Out {
+    tara.fill(fill::In { i });
+    match tara.quir_items[i] {
+        quir::Item::Typecase(_) => typecases(i.into_typecase(), tara),
+        quir::Item::Typedecl(_) => typedecls(i.into_typedecl(), tara),
+        quir::Item::Function(_) => functions(i.into_func(), tara),
+        quir::Item::Namespace(ref n) => {
+            let is = n.items.cheap();
             let mut items = Vec::with_capacity(is.len());
             for &i in is.values() {
                 items.push(tara.codegen(In { i }));
@@ -74,16 +65,17 @@ fn codegen(tara: &mut Tara, i: In) -> Out {
 
 fn typedecls(d: TypedeclId, tara: &mut Tara) -> Out {
     let ctx = tara.llvm_mod.get_context();
-    let cases = tara.uir_items[d].cases.cheap();
+    let cases = tara.quir_items[d].cases.cheap();
     let tag_size = cases.len().next_power_of_two().ilog2();
     let tag_type = ctx.custom_width_int_type(tag_size);
     let tag_align = tara.target.get_target_data().get_abi_alignment(&tag_type);
+
     let cases_tails: Vec<_> = cases
         .iter()
         .map(|&c| {
-            let bind = tara.uir_interfaces[c].binding;
-            let bind = tara[(c, bind)].typ.kind;
-            let bind = tara.uir_types[bind].cheap();
+            let bind = tara.quir_items[c].binding;
+            let bind = tara.quir_items[c].locals[bind].typ.kind;
+            let bind = tara.quir_types[bind].cheap();
             any_to_basic_type(lower_type(bind, None, tara, ctx), ctx)
         })
         .collect();
@@ -93,6 +85,7 @@ fn typedecls(d: TypedeclId, tara: &mut Tara) -> Out {
         .max()
         .unwrap_or(0)
         .next_multiple_of(tag_align as u64);
+
     let opaque_type = ctx.struct_type(
         &[
             ctx.custom_width_int_type(tail_size as u32 * 8).into(),
@@ -114,6 +107,7 @@ fn typedecls(d: TypedeclId, tara: &mut Tara) -> Out {
             )
         })
         .collect();
+
     Out::Typedecl(opaque_type, tail_types.into())
 }
 
@@ -123,17 +117,19 @@ fn typedecls(d: TypedeclId, tara: &mut Tara) -> Out {
 // |   i11    |  i7  |   i9   |   i9    | i5  |
 // | concrete | tail | fields | padding | tag |
 fn typecases(c: TypecaseId, tara: &mut Tara) -> Out {
-    let case = tara.uir_interfaces[c];
-    let name = case.name.name.0;
-    let ty = tara.uir_types[case.typ.kind].clone();
+    let (case_typ, case_parent, case_index, name) = {
+        let case = &tara.quir_items[c];
+        (case.typ, case.parent, case.index, case.name.name.0)
+    };
+    let ty = tara.quir_types[case_typ.kind].cheap();
     let llvm_ctx = tara.llvm_mod.get_context();
     let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, tara, llvm_ctx) else {
         panic!("constructors should be functions?")
     };
     let (ret, agg_type) = match tara.codegen(In {
-        i: case.parent.into(),
+        i: case_parent.into(),
     }) {
-        Out::Typedecl(ret, cases_type) => (ret, cases_type[case.index]),
+        Out::Typedecl(ret, cases_type) => (ret, cases_type[case_index]),
         _ => panic!(),
     };
 
@@ -150,26 +146,34 @@ fn typecases(c: TypecaseId, tara: &mut Tara) -> Out {
     let Some(BasicTypeEnum::IntType(tag)) = agg_type.get_field_type_at_index(2) else {
         panic!()
     };
-    let tag = tag.const_int(case.index as u64, false);
+    let tag = tag.const_int(case_index as u64, false);
     let agg = builder
         .build_insert_value(agg, tag, 2, "typecase_tag")
         .unwrap();
-    let agg = builder.build_bit_cast(agg, ret, "typecase_to_opaque").unwrap();
+    // as llvm is a cunt, do some pointer fuckery instead
+    // let agg = builder
+    //     .build_bit_cast(agg, ret, "typecase_to_opaque")
+    //     .unwrap();
+    let agg = {
+        let agg_ptr = builder.build_alloca(agg_type, "alloca_typecase").unwrap();
+        builder.build_store(agg_ptr, agg).unwrap();
+        builder.build_load(ret, agg_ptr, "*(type*)typecase").unwrap()
+    };
     builder.build_return(Some(&agg)).unwrap();
 
     Out::Func(val)
 }
 
-fn functions(f: FuncId, tara: &mut Tara) -> Out {
-    let ty = tara.item_type(f.into(), None).kind;
-    let ty = tara.uir_types[ty].clone();
+fn functions(f: FunctionId, tara: &mut Tara) -> Out {
+    let ty = tara.quir_items[f].typ.kind;
+    let ty = tara.quir_types[ty].cheap();
     let llvm_ctx = tara.llvm_mod.get_context();
     let AnyTypeEnum::FunctionType(ty) = lower_type(ty, None, tara, llvm_ctx) else {
         panic!("non-function typed functions??")
     };
     let val = tara
         .llvm_mod
-        .add_function(tara.item_name(f).name.0, ty, None);
+        .add_function(tara.quir_items[f].name.name.0, ty, None);
     let entry = llvm_ctx.append_basic_block(val, "entry");
     let ret_b = llvm_ctx.append_basic_block(val, "return");
     let builder = llvm_ctx.create_builder();
@@ -177,7 +181,7 @@ fn functions(f: FuncId, tara: &mut Tara) -> Out {
     let ret_v = builder
         .build_alloca(ty.get_return_type().unwrap(), "&return_slot")
         .unwrap();
-    let mut ctx = Context {
+    let mut ctx = Ctx {
         lets: Default::default(),
         loops: Vec::new(),
         ctx: llvm_ctx,
@@ -188,7 +192,8 @@ fn functions(f: FuncId, tara: &mut Tara) -> Out {
         tara,
         val,
     };
-    match ctx.expressions(ctx.tara.uir_items[ctx.id].body) {
+    let body = ctx.tara.quir_items[ctx.id].body;
+    match body.codegen(&mut ctx) {
         Err(Control::Return) => {}
         Err(Control::Break) => panic!("breaks in plain bareblock shouldn't happen"),
         Ok(body) => {
@@ -235,16 +240,16 @@ fn any_to_basic_value(v: AnyValueEnum<'static>) -> BasicValueEnum<'static> {
 }
 
 fn lower_type(
-    t: uir::Typekind,
-    args: Option<uir::Typekind>,
+    t: Typekind,
+    args: Option<Typekind>,
     tara: &mut Tara,
     ctx: ContextRef<'static>,
 ) -> AnyTypeEnum<'static> {
     match t {
-        uir::Typekind::Bundle(_) => panic!("found bundle outside of call!"),
-        uir::Typekind::Var(n) => panic!("well something went wrong!\nfound type var: {}", n),
-        uir::Typekind::Func { args, ret } => {
-            let args = tara.uir_types[args].clone();
+        Typekind::Bundle(_) => panic!("found bundle outside of call!"),
+        Typekind::Var(n) => panic!("well something went wrong!\nfound type var: {}", n),
+        Typekind::Func { args, ret } => {
+            let args = tara.quir_types[args].clone();
             let args: BasicMetadataTypeEnum = match lower_type(args, None, tara, ctx) {
                 AnyTypeEnum::FunctionType(_) => ctx.ptr_type(AddressSpace::from(0u16)).into(),
                 AnyTypeEnum::ArrayType(t) => t.into(),
@@ -255,25 +260,25 @@ fn lower_type(
                 AnyTypeEnum::VectorType(t) => t.into(),
                 AnyTypeEnum::VoidType(_) => panic!("I have no idea"),
             };
-            let ret = tara.uir_types[ret].clone();
+            let ret = tara.quir_types[ret].clone();
             let ret = any_to_basic_type(lower_type(ret, None, tara, ctx), ctx);
             ret.fn_type(&[args], false).into()
         }
-        uir::Typekind::Call { args, func } => {
-            let args = tara.uir_types[args].clone();
-            let func = tara.uir_types[func].clone();
+        Typekind::Call { args, func } => {
+            let args = tara.quir_types[args].clone();
+            let func = tara.quir_types[func].clone();
             lower_type(func, Some(args), tara, ctx)
         }
-        uir::Typekind::String => ctx.ptr_type(AddressSpace::from(0u16)).into(),
-        uir::Typekind::Bool => ctx.custom_width_int_type(1).into(),
-        uir::Typekind::Int => ctx.i64_type().into(),
-        uir::Typekind::Tup => {
-            let Some(uir::Typekind::Bundle(args)) = args else {
+        Typekind::String => ctx.ptr_type(AddressSpace::from(0u16)).into(),
+        Typekind::Bool => ctx.custom_width_int_type(1).into(),
+        Typekind::Int => ctx.i64_type().into(),
+        Typekind::Tup => {
+            let Some(Typekind::Bundle(args)) = args else {
                 panic!("uninstantiated tuples??")
             };
             let mut fields = Vec::with_capacity(args.len());
             for &a in args.iter() {
-                let a = tara.uir_types[a].clone();
+                let a = tara.quir_types[a].clone();
                 let a: BasicTypeEnum = match lower_type(a, None, tara, ctx) {
                     AnyTypeEnum::FunctionType(_) => ctx.ptr_type(AddressSpace::from(0u16)).into(),
                     AnyTypeEnum::ArrayType(t) => t.into(),
@@ -288,337 +293,205 @@ fn lower_type(
             }
             ctx.struct_type(fields.as_slice(), false).into()
         }
-        uir::Typekind::Recall(id) => match tara.codegen(In { i: id }) {
+        Typekind::Recall(_, _, None) => panic!("resolve'da"),
+        Typekind::Recall(_, _, Some(id)) => match tara.codegen(In { i: id }) {
             Out::Func(_) | Out::Namespace(_) => panic!("why is a non-type id in the type?"),
             Out::Typedecl(t, _) => t.into(),
         },
     }
 }
 
-struct Context<'a> {
+pub struct Ctx<'a> {
     builder: Builder<'static>,
     ctx: ContextRef<'static>,
     val: FunctionValue<'static>,
     lets: Map<Istr, (BasicTypeEnum<'static>, PointerValue<'static>)>,
-    id: FuncId,
+    id: FunctionId,
     ret_v: PointerValue<'static>,
     ret_b: BasicBlock<'static>,
     loops: Vec<(BasicBlock<'static>, PointerValue<'static>)>,
     tara: &'a mut Tara,
 }
+impl std::ops::Index<ExprId> for Ctx<'_> {
+    type Output = Expr;
+    fn index(&self, id: ExprId) -> &Self::Output {
+        &self.tara.quir_items[self.id].locals[id]
+    }
+}
+impl std::ops::Index<BindingId> for Ctx<'_> {
+    type Output = Binding;
+    fn index(&self, id: BindingId) -> &Self::Output {
+        &self.tara.quir_items[self.id].locals[id]
+    }
+}
 
-impl Context<'_> {
-    fn expressions(&mut self, e: ExprId) -> Result {
-        match self.tara[(self.id, e)].kind {
-            uir::Exprkind::If { cond, smash, pass } => {
-                let cond = match self.expressions(cond)? {
-                    AnyValueEnum::IntValue(c) => c,
-                    _ => panic!("typechecker should've caught this"),
-                };
-                let smash_b = self.ctx.append_basic_block(self.val, "smash");
-                let pass_b = self.ctx.append_basic_block(self.val, "pass");
-                let post_b = self.ctx.append_basic_block(self.val, "post");
-                self.builder
-                    .build_conditional_branch(cond, smash_b, pass_b)
-                    .unwrap();
-                let mut cont = false;
+impl ExprId {
+    fn codegen(&self, ctx: &mut Ctx) -> Result {
+        let this = ctx[*self].cheap();
+        this.kind.codegen(this.typ, ctx)
+    }
+}
 
-                self.builder.position_at_end(smash_b);
-                let smash_v = self.expressions(smash);
-                if smash_v.is_ok() {
-                    self.builder.build_unconditional_branch(post_b).unwrap();
-                    cont = true;
-                }
-                self.builder.position_at_end(pass_b);
-                let pass_v = self.expressions(pass);
-                if pass_v.is_ok() {
-                    self.builder.build_unconditional_branch(post_b).unwrap();
-                    cont = true;
-                }
+impl expr::If {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let cond = match self.cond.codegen(ctx)? {
+            AnyValueEnum::IntValue(c) => c,
+            _ => panic!("typechecker should've caught this"),
+        };
+        let smash_b = ctx.ctx.append_basic_block(ctx.val, "smash");
+        let pass_b = ctx.ctx.append_basic_block(ctx.val, "pass");
+        let post_b = ctx.ctx.append_basic_block(ctx.val, "post");
+        ctx.builder
+            .build_conditional_branch(cond, smash_b, pass_b)
+            .unwrap();
+        let mut cont = false;
 
-                self.builder.position_at_end(post_b);
-                if !cont {
-                    self.builder.build_unreachable().unwrap();
-                    if Err(Control::Break) == smash_v {
-                        return smash_v;
-                    }
-                    if let Err(Control::Break) = pass_v {
-                        return pass_v;
-                    }
-                    return smash_v;
-                }
+        ctx.builder.position_at_end(smash_b);
+        let smash_v = self.smash.codegen(ctx);
+        if smash_v.is_ok() {
+            ctx.builder.build_unconditional_branch(post_b).unwrap();
+            cont = true;
+        }
+        ctx.builder.position_at_end(pass_b);
+        let pass_v = self.pass.codegen(ctx);
+        if pass_v.is_ok() {
+            ctx.builder.build_unconditional_branch(post_b).unwrap();
+            cont = true;
+        }
 
-                let (l, p, q) = match (smash_v, pass_v) {
-                    (Ok(p), Ok(q)) => (
-                        2,
-                        (any_to_basic_value(p), smash_b),
-                        (any_to_basic_value(q), pass_b),
-                    ),
-                    (Ok(p), _) => (
-                        1,
-                        (any_to_basic_value(p), smash_b),
-                        (self.ctx.const_struct(&[], false).into(), pass_b),
-                    ),
-                    (_, Ok(p)) => (
-                        1,
-                        (any_to_basic_value(p), pass_b),
-                        (self.ctx.const_struct(&[], false).into(), smash_b),
-                    ),
-                    _ => unreachable!(),
-                };
-                let incoming: &[(&dyn BasicValue, _)] = if l == 1 {
-                    &[(&p.0, p.1)]
-                } else {
-                    &[(&p.0, p.1), (&q.0, q.1)]
-                };
+        ctx.builder.position_at_end(post_b);
+        if !cont {
+            ctx.builder.build_unreachable().unwrap();
+            if Err(Control::Break) == smash_v {
+                return smash_v;
+            }
+            if let Err(Control::Break) = pass_v {
+                return pass_v;
+            }
+            return smash_v;
+        }
 
-                let phi_v = self
-                    .builder
-                    .build_phi(p.0.get_type(), "merge_branches")
-                    .unwrap();
-                phi_v.add_incoming(incoming);
-                Ok(phi_v.into())
-            }
-            uir::Exprkind::Call { func, args } => {
-                if let uir::Exprkind::Builtin(b) = self.tara[(self.id, func)].kind {
-                    self.builtins(b, args)
-                } else {
-                    let func_v = match self.expressions(func)? {
-                        AnyValueEnum::FunctionValue(v) => v,
-                        _ => panic!("help me"),
-                    };
-                    let args = self.expressions(args)?;
-                    let res = self
-                        .builder
-                        .build_call(func_v, &[any_to_basic_value(args).into()], "call")
-                        .unwrap();
-                    Ok(res.as_any_value_enum())
-                }
-            }
-            uir::Exprkind::Builtin(_) => {
-                panic!("builtins shouldn't be used for anything other than calls")
-            }
-            uir::Exprkind::Tuple(ref expr_ids) => {
-                let expr_ids = expr_ids.clone();
-                let ty = self.tara.uir_types[self.tara[(self.id, e)].typ.kind].clone();
-                let AnyTypeEnum::StructType(ty) = lower_type(ty, None, self.tara, self.ctx)
-                else {
-                    panic!("aaaaaaaa")
-                };
-                let mut comma = ty.get_undef().into();
-                for (ix, &id) in expr_ids.iter().enumerate() {
-                    let v = any_to_basic_value(self.expressions(id)?);
-                    comma = self
-                        .builder
-                        .build_insert_value(comma, v, ix as u32, "tuple")
-                        .unwrap();
-                }
-                Ok(comma.as_any_value_enum())
-            }
-            uir::Exprkind::Loop(expr_id) => {
-                let ty = self.tara[(self.id, e)].typ.kind;
-                let ty = self.tara.uir_types[ty].clone();
-                let ty = lower_type(ty, None, self.tara, self.ctx);
-                let ty = any_to_basic_type(ty, self.ctx);
-                let post_v = self.builder.build_alloca(ty, "&loop_slot").unwrap();
-                let loop_b = self.ctx.append_basic_block(self.val, "loop");
-                let post_b = self.ctx.append_basic_block(self.val, "loop_end");
-                self.loops.push((post_b, post_v));
-                self.builder.build_unconditional_branch(loop_b).unwrap();
-                self.builder.position_at_end(loop_b);
-                let v = self.expressions(expr_id);
-                if Err(Control::Return) == v {
-                    return v;
-                }
-                if v.is_ok() {
-                    self.builder.build_unconditional_branch(loop_b).unwrap();
-                }
-                self.builder.position_at_end(post_b);
-                self.loops.pop();
-                let v = self.builder.build_load(ty, post_v, "*loop_slot").unwrap();
-                Ok(v.into())
-            }
-            uir::Exprkind::Bareblock(ref expr_ids) => {
-                let mut out = self.ctx.const_struct(&[], false).into();
-                let expr_ids = expr_ids.clone();
-                for &id in expr_ids.iter() {
-                    out = self.expressions(id)?;
-                }
-                Ok(out)
-            }
-            // name resolution done before the typer is useless now
-            // as the data we need is not a field in the struct
-            uir::Exprkind::Recall(Ok(l)) => {
-                let uir::Bindkind::Name(n, _) = self.tara[(self.id, l)].kind else {
-                    panic!("I have no idea")
-                };
-                let (ty, ptr) = self.lets.get(&n).copied().unwrap();
-                let out = self.builder.build_load(ty, ptr, "recall_local").unwrap();
-                Ok(out.into())
-            }
-            // 'cycles' like /this/ are fine, the value exists already
-            uir::Exprkind::Recall(Err(g)) => Ok(if g == self.id.into() {
-                self.val.into()
-            } else {
-                let Out::Func(f) = self.tara.codegen(In { i: g }) else {
-                    panic!("huh?");
-                };
-                f.into()
-            }),
+        let (l, p, q) = match (smash_v, pass_v) {
+            (Ok(p), Ok(q)) => (
+                2,
+                (any_to_basic_value(p), smash_b),
+                (any_to_basic_value(q), pass_b),
+            ),
+            (Ok(p), _) => (
+                1,
+                (any_to_basic_value(p), smash_b),
+                (ctx.ctx.const_struct(&[], false).into(), pass_b),
+            ),
+            (_, Ok(p)) => (
+                1,
+                (any_to_basic_value(p), pass_b),
+                (ctx.ctx.const_struct(&[], false).into(), smash_b),
+            ),
+            _ => unreachable!(),
+        };
+        let incoming: &[(&dyn BasicValue, _)] = if l == 1 {
+            &[(&p.0, p.1)]
+        } else {
+            &[(&p.0, p.1), (&q.0, q.1)]
+        };
 
-            uir::Exprkind::Number(istr) => {
-                let v = self
-                    .ctx
-                    .custom_width_int_type(64)
-                    .const_int_from_string(istr.0, StringRadix::Decimal)
-                    .unwrap();
-                Ok(v.into())
-            }
-            uir::Exprkind::String(istr) => {
-                let global = self
-                    .builder
-                    .build_global_string_ptr(istr.0, "string_literal")
-                    .unwrap();
-                Ok(global.as_pointer_value().into())
-            }
-            uir::Exprkind::Bool(istr) => {
-                let v = if istr == "true".into() { 1 } else { 0 };
-                let v = self.ctx.custom_width_int_type(1).const_int(v, false);
-                Ok(v.into())
-            }
-            uir::Exprkind::Arguments => Ok(self.val.get_nth_param(0).unwrap().into()),
-            uir::Exprkind::Poison => {
-                panic!("Poison should've barred codegen from running earlier on!")
-            }
-            uir::Exprkind::Let(binding_id, expr_id) => {
-                let v = self.expressions(expr_id)?;
-                let v = any_to_basic_value(v);
-                self.bindings(binding_id, v);
-                Ok(self.ctx.const_struct(&[], false).into())
-            }
-            uir::Exprkind::Assign(l, expr_id) => {
-                let uir::Bindkind::Name(n, _) = self.tara[(self.id, l)].kind else {
-                    panic!("I have no idea")
-                };
-                let v = self.expressions(expr_id)?;
-                let (_, ptr) = self.lets.get(&n).unwrap();
-                self.builder
-                    .build_store(*ptr, any_to_basic_value(v))
-                    .unwrap();
-                Ok(self.ctx.const_struct(&[], false).into())
-            }
-            uir::Exprkind::Break { val, target: _ } => {
-                let v = self.expressions(val)?;
-                let (block, ptr) = self.loops.last().unwrap();
-                self.builder
-                    .build_store(*ptr, any_to_basic_value(v))
-                    .unwrap();
-                self.builder.build_unconditional_branch(*block).unwrap();
-                Err(Control::Break)
-            }
-            uir::Exprkind::Return(expr_id) => {
-                let v = self.expressions(expr_id)?;
-                self.builder
-                    .build_store(self.ret_v, any_to_basic_value(v))
-                    .unwrap();
-                self.builder.build_unconditional_branch(self.ret_b).unwrap();
-                Err(Control::Return)
-            }
-            uir::Exprkind::Const(expr_id) => {
-                self.expressions(expr_id)?;
-                Ok(self.ctx.const_struct(&[], false).into())
-            }
+        let phi_v = ctx
+            .builder
+            .build_phi(p.0.get_type(), "merge_branches")
+            .unwrap();
+        phi_v.add_incoming(incoming);
+        Ok(phi_v.into())
+    }
+}
+
+impl expr::Call {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        if let expr::Kind::Builtin(b) = ctx[self.func].kind {
+            let typ = ctx[self.func].typ;
+            b.codegen_real(self.args, typ, ctx)
+        } else {
+            let func_v = match self.func.codegen(ctx)? {
+                AnyValueEnum::FunctionValue(v) => v,
+                _ => panic!("help me"),
+            };
+            let args = self.args.codegen(ctx)?;
+            let res = ctx
+                .builder
+                .build_call(func_v, &[any_to_basic_value(args).into()], "call")
+                .unwrap();
+            Ok(res.as_any_value_enum())
         }
     }
+}
 
-    fn bindings(&mut self, b: uir::BindingId, v: BasicValueEnum<'static>) {
-        match self.tara[(self.id, b)].kind {
-            uir::Bindkind::Empty => {}
-            uir::Bindkind::Name(istr, _) => {
-                let ty = v.get_type();
-                let ptr = self.builder.build_alloca(ty, "let").unwrap();
-                self.builder.build_store(ptr, v).unwrap();
-                self.lets.insert(istr, (ty, ptr));
-            }
-            uir::Bindkind::Tuple(ref binding_ids) => {
-                let binding_ids = binding_ids.clone();
-                let BasicValueEnum::StructValue(v) = v else {
-                    panic!("typer shouldn't allow anything else")
-                };
-                for (i, &b) in binding_ids.iter().enumerate() {
-                    let v = self
-                        .builder
-                        .build_extract_value(v, i as u32, "destructure")
-                        .unwrap();
-                    self.bindings(b, v);
-                }
-            }
-        }
+impl expr::Builtinkind {
+    pub fn codegen(&self, _: Type, _: &mut Ctx) -> Result {
+        panic!("builtin shouldn't call codegen as it requires arguments!")
     }
 
-    fn builtins(&mut self, b: uir::Builtinkind, a: uir::ExprId) -> Result {
+    pub fn codegen_real(&self, args_id: ExprId, _: Type, ctx: &mut Ctx) -> Result {
         let mut args = Vec::with_capacity(7);
-        match self.tara[(self.id, a)].kind {
-            uir::Exprkind::Tuple(ref fields) => {
-                for &f in fields.clone().iter() {
-                    let f = self.expressions(f)?;
+        match ctx[args_id].kind {
+            expr::Kind::Tuple(ref t) => {
+                for &f in t.0.cheap().iter() {
+                    let f = f.codegen(ctx)?;
                     args.push(f);
                 }
             }
             _ => {
-                let a = self.expressions(a)?;
+                let a = args_id.codegen(ctx)?;
                 args.push(a);
             }
         }
-
-        let name = b.spelling();
-        Ok(match b {
-            uir::Builtinkind::Add => self
+        let name = self.spelling();
+        use expr::Builtinkind::*;
+        Ok(match self {
+            Add => ctx
                 .builder
                 .build_int_add(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Sub => self
+            Sub => ctx
                 .builder
                 .build_int_sub(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Mul => self
+            Mul => ctx
                 .builder
                 .build_int_mul(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Div => self
+            Div => ctx
                 .builder
                 .build_int_unsigned_div(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Mod => self
+            Mod => ctx
                 .builder
                 .build_int_unsigned_rem(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::And => self
+            And => ctx
                 .builder
                 .build_and(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Or => self
+            Or => ctx
                 .builder
                 .build_or(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Xor => self
+            Xor => ctx
                 .builder
                 .build_xor(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::ShLeft => self
+            ShLeft => ctx
                 .builder
                 .build_left_shift(args[0].into_int_value(), args[1].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::ShRight => self
+            ShRight => ctx
                 .builder
                 .build_right_shift(
                     args[0].into_int_value(),
@@ -628,17 +501,17 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Not => self
+            Not => ctx
                 .builder
                 .build_not(args[0].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Negate => self
+            Negate => ctx
                 .builder
                 .build_int_neg(args[0].into_int_value(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpEq => self
+            CmpEq => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::EQ,
@@ -648,7 +521,7 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpNE => self
+            CmpNE => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::NE,
@@ -658,7 +531,7 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpGt => self
+            CmpGt => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::UGT,
@@ -668,7 +541,7 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpLt => self
+            CmpLt => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::ULT,
@@ -678,7 +551,7 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpGE => self
+            CmpGE => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::UGE,
@@ -688,7 +561,7 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::CmpLE => self
+            CmpLE => ctx
                 .builder
                 .build_int_compare(
                     IntPredicate::ULE,
@@ -698,26 +571,26 @@ impl Context<'_> {
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::IntToPtr => self
+            IntToPtr => ctx
                 .builder
                 .build_int_to_ptr(
                     args[0].into_int_value(),
-                    self.ctx.ptr_type(AddressSpace::from(0)),
+                    ctx.ctx.ptr_type(AddressSpace::from(0)),
                     name,
                 )
                 .unwrap()
                 .into(),
-            uir::Builtinkind::PtrToInt => self
+            PtrToInt => ctx
                 .builder
-                .build_ptr_to_int(args[0].into_pointer_value(), self.ctx.i64_type(), name)
+                .build_ptr_to_int(args[0].into_pointer_value(), ctx.ctx.i64_type(), name)
                 .unwrap()
                 .into(),
-            uir::Builtinkind::Syscall => {
-                let asm_t = self
+            Syscall => {
+                let asm_t = ctx
                     .ctx
                     .i64_type()
-                    .fn_type(&[self.ctx.i64_type().into(); 7], false);
-                let asm_v = self.ctx.create_inline_asm(
+                    .fn_type(&[ctx.ctx.i64_type().into(); 7], false);
+                let asm_v = ctx.ctx.create_inline_asm(
                     asm_t,
                     "syscall".into(),
                     "=r,{rax},{rdi},{rsi},{rdx},{r8},{r9},{r10}".into(),
@@ -726,7 +599,7 @@ impl Context<'_> {
                     Some(InlineAsmDialect::Intel),
                     false,
                 );
-                self.builder
+                ctx.builder
                     .build_indirect_call(
                         asm_t,
                         asm_v,
@@ -745,5 +618,211 @@ impl Context<'_> {
                     .as_any_value_enum()
             }
         })
+    }
+}
+
+impl expr::Tuple {
+    pub fn codegen(&self, typ: Type, ctx: &mut Ctx) -> Result {
+        let expr_ids = self.0.cheap();
+        let ty = ctx.tara.quir_types[typ.kind].cheap();
+        let AnyTypeEnum::StructType(ty) = lower_type(ty, None, ctx.tara, ctx.ctx) else {
+            panic!("aaaaaaaa")
+        };
+        let mut comma = ty.get_undef().into();
+        for (ix, &id) in expr_ids.iter().enumerate() {
+            let v = any_to_basic_value(id.codegen(ctx)?);
+            comma = ctx
+                .builder
+                .build_insert_value(comma, v, ix as u32, "tuple")
+                .unwrap();
+        }
+        Ok(comma.as_any_value_enum())
+    }
+}
+
+impl expr::Loop {
+    pub fn codegen(&self, typ: Type, ctx: &mut Ctx) -> Result {
+        let ty = typ.kind;
+        let ty = ctx.tara.quir_types[ty].clone();
+        let ty = lower_type(ty, None, ctx.tara, ctx.ctx);
+        let ty = any_to_basic_type(ty, ctx.ctx);
+        let post_v = ctx.builder.build_alloca(ty, "&loop_slot").unwrap();
+        let loop_b = ctx.ctx.append_basic_block(ctx.val, "loop");
+        let post_b = ctx.ctx.append_basic_block(ctx.val, "loop_end");
+        ctx.loops.push((post_b, post_v));
+        ctx.builder.build_unconditional_branch(loop_b).unwrap();
+        ctx.builder.position_at_end(loop_b);
+        let v = self.0.codegen(ctx);
+        if Err(Control::Return) == v {
+            return v;
+        }
+        if v.is_ok() {
+            ctx.builder.build_unconditional_branch(loop_b).unwrap();
+        }
+        ctx.builder.position_at_end(post_b);
+        ctx.loops.pop();
+        let v = ctx.builder.build_load(ty, post_v, "*loop_slot").unwrap();
+        Ok(v.into())
+    }
+}
+
+impl expr::Bareblock {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let mut out = ctx.ctx.const_struct(&[], false).into();
+        for &id in self.0.cheap().iter() {
+            out = id.codegen(ctx)?;
+        }
+        Ok(out)
+    }
+}
+
+impl expr::Recall {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        match self.1.expect("resolve'da") {
+            // name resolution done before the typer is useless now
+            // as the data we need is not a field in the struct
+            Left(l) => {
+                let binding::Kind::Name(n) = ctx[l].kind else {
+                    panic!("I have no idea")
+                };
+                let (ty, ptr) = ctx.lets.get(&n.0).copied().unwrap();
+                let out = ctx.builder.build_load(ty, ptr, "recall_local").unwrap();
+                Ok(out.into())
+            }
+            // 'cycles' like /this/ are fine, the value exists already
+            Right(g) => Ok(if g == ctx.id.into() {
+                ctx.val.into()
+            } else {
+                let Out::Func(f) = ctx.tara.codegen(In { i: g }) else {
+                    panic!("huh?");
+                };
+                f.into()
+            }),
+        }
+    }
+}
+
+impl expr::Number {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = ctx
+            .ctx
+            .custom_width_int_type(64)
+            .const_int_from_string(self.0 .0, StringRadix::Decimal)
+            .unwrap();
+        Ok(v.into())
+    }
+}
+
+impl expr::String {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let global = ctx
+            .builder
+            .build_global_string_ptr(self.0 .0, "string_literal")
+            .unwrap();
+        Ok(global.as_pointer_value().into())
+    }
+}
+
+impl expr::Bool {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = if self.0 == "true".into() { 1 } else { 0 };
+        let v = ctx.ctx.custom_width_int_type(1).const_int(v, false);
+        Ok(v.into())
+    }
+}
+
+impl expr::Arguments {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        Ok(ctx.val.get_nth_param(0).unwrap().into())
+    }
+}
+
+impl expr::Poison {
+    pub fn codegen(&self, _: Type, _: &mut Ctx) -> Result {
+        panic!("Poison should've barred codegen from running earlier on!")
+    }
+}
+
+impl expr::Let {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = self.1.codegen(ctx)?;
+        let v = any_to_basic_value(v);
+        self.0.codegen(v, ctx);
+        Ok(ctx.ctx.const_struct(&[], false).into())
+    }
+}
+
+impl expr::Assign {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = self.2.codegen(ctx)?;
+        let (_, ptr) = ctx.lets.get(&self.0.name).unwrap();
+        ctx.builder
+            .build_store(*ptr, any_to_basic_value(v))
+            .unwrap();
+        Ok(ctx.ctx.const_struct(&[], false).into())
+    }
+}
+
+impl expr::Break {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = self.val.codegen(ctx)?;
+        let (block, ptr) = ctx.loops.last().unwrap();
+        ctx.builder
+            .build_store(*ptr, any_to_basic_value(v))
+            .unwrap();
+        ctx.builder.build_unconditional_branch(*block).unwrap();
+        Err(Control::Break)
+    }
+}
+
+impl expr::Return {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        let v = self.0.codegen(ctx)?;
+        ctx.builder
+            .build_store(ctx.ret_v, any_to_basic_value(v))
+            .unwrap();
+        ctx.builder.build_unconditional_branch(ctx.ret_b).unwrap();
+        Err(Control::Return)
+    }
+}
+
+impl expr::Const {
+    pub fn codegen(&self, _: Type, ctx: &mut Ctx) -> Result {
+        self.0.codegen(ctx)?;
+        Ok(ctx.ctx.const_struct(&[], false).into())
+    }
+}
+
+impl BindingId {
+    fn codegen(&self, v: BasicValueEnum<'static>, ctx: &mut Ctx) {
+        ctx[*self].kind.cheap().codegen(v, ctx);
+    }
+}
+
+impl binding::Empty {
+    pub fn codegen(&self, _: BasicValueEnum, _: &mut Ctx) {}
+}
+
+impl binding::Name {
+    pub fn codegen(&self, v: BasicValueEnum<'static>, ctx: &mut Ctx) {
+        let ty = v.get_type();
+        let ptr = ctx.builder.build_alloca(ty, "let").unwrap();
+        ctx.builder.build_store(ptr, v).unwrap();
+        ctx.lets.insert(self.0, (ty, ptr));
+    }
+}
+
+impl binding::Tuple {
+    pub fn codegen(&self, v: BasicValueEnum<'static>, ctx: &mut Ctx) {
+        let BasicValueEnum::StructValue(v) = v else {
+            panic!("typer shouldn't allow anything else")
+        };
+        for (i, &b) in self.0.cheap().iter().enumerate() {
+            let v = ctx
+                .builder
+                .build_extract_value(v, i as u32, "destructure")
+                .unwrap();
+            b.codegen(v, ctx);
+        }
     }
 }

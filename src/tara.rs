@@ -4,64 +4,93 @@ pub mod parse;
 pub mod preimport;
 pub mod prescan;
 pub mod typer;
-pub mod uir;
+// pub mod uir;
+pub mod quir;
+pub mod resolve;
 
 use inkwell::targets::{self, TargetMachine};
 
-use crate::misc::Indexer;
 use crate::{ansi::Style, misc::Ivec, report_simple, MkIndexer, Provenance};
 use crate::{report, FmtMessage};
 use std::{
-    collections::{BTreeMap as Map, BTreeSet as Set},
+    collections::BTreeMap as Map,
     path::PathBuf,
 };
+
+#[macro_export]
+macro_rules! gen_query {
+    ($name:ident) => {
+        impl $crate::tara::Tara {
+            pub fn $name(&mut self, i: In) -> Out {
+                match self.$name.get(&i) {
+                    Some(Some(o)) => o.cheap(),
+                    Some(None) => panic!(
+                        "{} entered a cycle!\nWith input: {:?}",
+                        stringify!($name), i
+                    ),
+                    None => {
+                        self.$name.insert(i, None);
+                        let data = $name(self, i);
+                        self.$name.insert(i, Some(data));
+                        self.$name.get(&i).unwrap().cheap().unwrap()
+                    },
+                }
+            }
+        }
+    };
+}
 
 pub struct Tara {
     // stores
     pub entry: ModuleId,
     pub modules: Ivec<ModuleId, Module>,
-    pub uir_items: Ivec<uir::Id, uir::Item>,
-    pub uir_interfaces: Ivec<uir::Id, uir::Interface>,
-    pub uir_locals: Ivec<uir::Id, uir::LocalVec>,
-    pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
-    uir_tvars: usize,
+
+    // pub uir_items: Ivec<uir::Id, uir::Item>,
+    // pub uir_interfaces: Ivec<uir::Id, uir::Interface>,
+    // pub uir_locals: Ivec<uir::Id, uir::LocalVec>,
+    // pub uir_types: Ivec<uir::TypeId, uir::Typekind>,
+    // uir_tvars: usize,
+
+    pub quir_items: Ivec<quir::Id, quir::Item>,
+    pub quir_types: Ivec<quir::TypeId, quir::Typekind>,
+    pub quir_interns: Map<quir::Typekind, quir::TypeId>,
+    quir_tvars: usize,
+
     pub llvm_mod: inkwell::module::Module<'static>,
     pub target: TargetMachine,
     // passes
     codegen: Map<codegen::In, Option<codegen::Out>>,
-    fills: Set<fill::In>,
+    fill: Map<fill::In, Option<fill::Out>>,
     typecheck: Map<typer::In, Option<typer::Out>>,
-    resolution: Map<uir::In, Option<uir::Out>>,
-    parses: Map<parse::In, Option<parse::Out>>,
-    prescans: Map<prescan::In, Option<prescan::Out>>,
-    preimports: Map<preimport::In, Option<preimport::Out>>,
+    quir: Map<quir::In, Option<quir::Out>>,
+    // lower_uir: Map<uir::In, Option<uir::Out>>,
+    resolve: Map<resolve::In, Option<resolve::Out>>,
+    parse: Map<parse::In, Option<parse::Out>>,
+    prescan: Map<prescan::In, Option<prescan::Out>>,
+    preimport: Map<preimport::In, Option<preimport::Out>>,
 }
-impl<I: Into<uir::Id>> std::ops::Index<(I, uir::ExprId)> for Tara {
-    type Output = uir::Expr;
-    fn index(&self, (i, e): (I, uir::ExprId)) -> &Self::Output {
-        &self.uir_locals[i.into()][e]
-    }
-}
-impl<I: Into<uir::Id>> std::ops::Index<(I, uir::BindingId)> for Tara {
-    type Output = uir::Binding;
-    fn index(&self, (i, e): (I, uir::BindingId)) -> &Self::Output {
-        &self.uir_locals[i.into()][e]
-    }
-}
+// impl<I: Into<uir::Id>> std::ops::Index<(I, uir::ExprId)> for Tara {
+//     type Output = uir::Expr;
+//     fn index(&self, (i, e): (I, uir::ExprId)) -> &Self::Output {
+//         &self.uir_locals[i.into()][e]
+//     }
+// }
+// impl<I: Into<uir::Id>> std::ops::Index<(I, uir::BindingId)> for Tara {
+//     type Output = uir::Binding;
+//     fn index(&self, (i, e): (I, uir::BindingId)) -> &Self::Output {
+//         &self.uir_locals[i.into()][e]
+//     }
+// }
 
 impl Tara {
     #[inline]
     pub fn report(&self, head: FmtMessage, extra: &[FmtMessage]) {
         report(&self.modules, head, extra);
     }
-    #[inline]
-    pub fn unit(&mut self, loc: Provenance) -> uir::Type {
-        uir::Type::unit(&mut self.uir_types, loc)
-    }
-    #[inline]
-    pub fn item_name<I: Into<uir::Id>>(&self, i: I) -> parse::Ident {
-        self.uir_interfaces[i.into()].name()
-    }
+    // #[inline]
+    // pub fn item_name<I: Into<uir::Id>>(&self, i: I) -> parse::Ident {
+    //     self.uir_interfaces[i.into()].name()
+    // }
     pub fn from(main: &str) -> Self {
         let mut modules = Ivec::default();
         let top = modules.promise();
@@ -108,17 +137,23 @@ impl Tara {
             llvm_mod,
             target,
             codegen: Default::default(),
-            fills: Default::default(),
-            uir_items: Default::default(),
-            uir_types: Default::default(),
-            uir_locals: Default::default(),
-            uir_interfaces: Default::default(),
-            uir_tvars: 0,
+            fill: Default::default(),
+            // uir_items: Default::default(),
+            // uir_types: Default::default(),
+            // uir_locals: Default::default(),
+            // uir_interfaces: Default::default(),
+            // uir_tvars: 0,
+            quir_items: Default::default(),
+            quir_types: Default::default(),
+            quir_interns: Default::default(),
+            quir_tvars: 0,
             typecheck: Default::default(),
-            resolution: Default::default(),
-            parses: Default::default(),
-            prescans: Default::default(),
-            preimports: Default::default(),
+            // lower_uir: Default::default(),
+            parse: Default::default(),
+            prescan: Default::default(),
+            preimport: Default::default(),
+            quir: Default::default(),
+            resolve: Default::default(),
         }
     }
     pub fn print_modules(&self) {
@@ -164,9 +199,9 @@ impl Tara {
     pub fn get_lexer(&self, m: ModuleId) -> crate::lexer::Lexer<'static> {
         crate::lexer::Lexer::new(m, self.get_source(m))
     }
-    pub fn get_uir(&self, u: uir::Id) -> &uir::Item {
-        &self.uir_items[u]
-    }
+    // pub fn get_uir(&self, u: uir::Id) -> &uir::Item {
+    //     &self.uir_items[u]
+    // }
     pub fn eof_loc(&self, m: ModuleId) -> Provenance {
         let source = self.get_source(m);
         Provenance::Span {
