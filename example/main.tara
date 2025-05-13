@@ -1,5 +1,10 @@
-import main/foo/...;
-import main/foo/baz/exit;
+import foo/...;
+import foo/baz/exit;
+
+type string {}
+type int {}
+type bool {}
+type tuple {}
 
 type Foo {
     case Bar(c: string, i: int);
@@ -15,6 +20,7 @@ func fib(n: int): int = if n < 2 {
 func main(): int = {
     mut test = Foo/Bar("lol", 69);
     test = Foo/Baz(false);
+    if let Foo/Baz(cond) = test {};
     return fib(10);
 }
 

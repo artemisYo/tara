@@ -1,6 +1,6 @@
 use crate::Provenance;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token<S> {
     pub kind: Tokenkind,
     pub loc: Provenance,

@@ -1,12 +1,56 @@
-use std::{cell::RefCell, collections::BTreeSet, marker::PhantomData};
+use std::{
+    collections::BTreeSet,
+    io::{Read, Seek},
+    marker::PhantomData,
+};
 
-pub trait CheapClone: Clone {
-    fn cheap(&self) -> Self {
-        self.clone()
+#[derive(Debug)]
+pub struct GuardedFile(std::fs::File);
+impl From<std::fs::File> for GuardedFile {
+    fn from(value: std::fs::File) -> Self {
+        Self(value)
     }
 }
-impl<T: ?Sized> CheapClone for std::rc::Rc<T> {}
-impl<T: CheapClone> CheapClone for Option<T> {}
+impl GuardedFile {
+    pub fn access<O, F: FnOnce(&std::fs::File) -> O>(&self, f: F) -> O {
+        let mut file = &self.0;
+        let start = file.stream_position().unwrap();
+        let o = f(file);
+        file.seek(std::io::SeekFrom::Start(start)).unwrap();
+        o
+    }
+}
+
+pub struct CharRead<R>(R);
+impl<R: Read> CharRead<R> {
+    pub fn new(r: R) -> Self {
+        Self(r)
+    }
+}
+impl<R: Read> Iterator for CharRead<R> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut bytes = [0; 4];
+        let buf = &mut bytes[0..1];
+        if self.0.read(buf).ok()? < buf.len() {
+            return None;
+        }
+        let len = bytes[0].leading_ones() as usize;
+        assert!(len != 1);
+        match len {
+            0 => std::str::from_utf8(&bytes[0..1]).unwrap().chars().next(),
+            2..4 => {
+                let buf = &mut bytes[1..len];
+                if self.0.read(buf).ok()? < buf.len() {
+                    return None;
+                };
+                std::str::from_utf8(&bytes[0..len]).unwrap().chars().next()
+            }
+            _ => panic!("utf8 input has non-utf8-encoded bytes?"),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Svec<K, V> {
@@ -127,7 +171,7 @@ impl<I: Indexer, T> std::ops::IndexMut<I> for Ivec<I, T> {
 #[macro_export]
 macro_rules! MkIndexer {
     ($v:vis $name:ident, $base:ty) => {
-        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
         $v struct $name($base);
         impl From<usize> for $name {
             fn from(value: usize) -> Self {
@@ -166,42 +210,42 @@ impl Interner {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Istr(pub &'static str);
-impl PartialEq for Istr {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-impl Eq for Istr {}
-impl PartialOrd for Istr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for Istr {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // should be fine, as interning would recognize strings
-        // of different lengths as different
-        #[allow(ambiguous_wide_pointer_comparisons)]
-        (self.0 as *const str).cmp(&(other.0 as *const str))
-    }
-}
-impl From<&str> for Istr {
-    fn from(value: &str) -> Self {
-        thread_local! {
-            static STATE: RefCell<Interner> = const { RefCell::new(Interner { map: BTreeSet::new() }) };
-        }
-        Istr(STATE.with(|i| i.borrow_mut().intern(value)))
-    }
-}
-impl std::ops::Deref for Istr {
-    type Target = str;
+// #[derive(Clone, Copy, Debug)]
+// pub struct Istr(pub &'static str);
+// impl PartialEq for Istr {
+//     fn eq(&self, other: &Self) -> bool {
+//         std::ptr::eq(self.0, other.0)
+//     }
+// }
+// impl Eq for Istr {}
+// impl PartialOrd for Istr {
+//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+// impl Ord for Istr {
+//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+//         // should be fine, as interning would recognize strings
+//         // of different lengths as different
+//         #[allow(ambiguous_wide_pointer_comparisons)]
+//         (self.0 as *const str).cmp(&(other.0 as *const str))
+//     }
+// }
+// impl From<&str> for Istr {
+//     fn from(value: &str) -> Self {
+//         thread_local! {
+//             static STATE: RefCell<Interner> = const { RefCell::new(Interner { map: BTreeSet::new() }) };
+//         }
+//         Istr(STATE.with(|i| i.borrow_mut().intern(value)))
+//     }
+// }
+// impl std::ops::Deref for Istr {
+//     type Target = str;
 
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
+//     fn deref(&self) -> &Self::Target {
+//         self.0
+//     }
+// }
 
 #[macro_export]
 macro_rules! CommonEnum {

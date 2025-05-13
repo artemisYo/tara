@@ -1,7 +1,10 @@
 
-operator(3, +, 4);
-operator(3, -, 4);
-operator(1, <, 2);
+// operator(3, +, 4);
+// operator(3, -, 4);
+// operator(1, <, 2);
+
+type int {}
+type bool {}
 
 func <(a: int, b: int): bool = __builtin_cmp_lt(a, b);
 func -(a: int, b: int): int = __builtin_sub(a, b);

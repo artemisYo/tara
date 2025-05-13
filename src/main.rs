@@ -1,19 +1,29 @@
 mod ansi;
 mod lexer;
 mod misc;
-mod tara;
 mod tokens;
-use inkwell::targets::FileType;
-use misc::Ivec;
-pub use tara::*;
+mod control;
+mod data;
+mod modules;
+mod parse;
+mod convert;
+mod resolve;
+mod typer;
+mod fill;
+mod codegen;
 
+use std::io::{BufReader, Read, Seek, SeekFrom};
+
+use data::{quir, Codegen};
+use inkwell::targets::FileType;
+use misc::{CharRead, Ivec};
 use ansi::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provenance {
     None,
     Span {
-        module: ModuleId,
+        module: data::files::Id,
         start: usize,
         end: usize,
     },
@@ -52,20 +62,19 @@ impl Provenance {
     pub const ERROR: StyledStr<'static> = Style::red().apply("Error");
     pub const NOTE: StyledStr<'static> = Style::yellow().apply("Note");
 
-    pub fn source(&self, ctx: &Ivec<ModuleId, Module>) -> Option<String> {
+    pub fn source(&self, ctx: &data::files::Files) -> Option<String> {
         let Self::Span { module, start, .. } = *self else {
             return None;
         };
-        let name = ctx[module].get_path();
-        Some(format!("{}:b{}", name.to_string_lossy(), start))
+        Some(format!("{}:b{}", ctx[module].path.to_string_lossy(), start))
     }
 
     pub fn line_of(
         &self,
-        ctx: &Ivec<ModuleId, Module>,
+        ctx: &data::files::Files,
         pointer: Style,
         surround: usize,
-    ) -> Option<(usize, impl Iterator<Item = (String, String)>)> {
+    ) -> Option<(usize, Vec<(String, String)>)> {
         let Provenance::Span {
             module: span_module,
             start: span_start,
@@ -75,27 +84,35 @@ impl Provenance {
             return None;
         };
         let source = &ctx[span_module];
-        let src = source.get_source();
-        let start = src.get(..span_start)?;
-        let start = start
-            .rmatch_indices("\n")
-            .nth(surround)
-            .map(|(n, _)| n + 1)
-            .unwrap_or(0);
-        let end = src.get(span_end..)?;
-        let end = end
-            .match_indices("\n")
-            .nth(surround)
-            .map(|(n, _)| span_end + n)
-            .unwrap_or(src.len());
-        let text = &src[start..end];
+        source.source.access(|src_file| {
+            let src_len = source.source_len;
+            let mut src = BufReader::new(src_file);
 
-        let digits = start.checked_ilog10().unwrap_or(0) + 1;
-        let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
-        let digits = digits as usize;
-        Some((
-            digits,
-            text.lines()
+            src.seek(SeekFrom::Start(span_start.saturating_sub(1024) as u64)).unwrap();
+            let start = src.take(span_start.min(1024) as u64).bytes();
+            let start = start.filter_map(|i| i.ok())
+                .enumerate()
+                .filter(|(_, c)| *c == b'\n')
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let start = start + span_start.saturating_sub(1024);
+
+            let mut src = BufReader::new(src_file);
+            src.seek(SeekFrom::Start(span_end as u64)).unwrap();
+            let end = src.bytes()
+                .filter_map(|i| i.ok())
+                .enumerate()
+                .filter(|(_, c)| *c == b'\n')
+                .nth(surround)
+                .map(|(i, _)| span_end + i)
+                .unwrap_or(src_len);
+
+            let mut src = BufReader::new(src_file);
+            src.seek(SeekFrom::Start(start as u64)).unwrap();
+            let text = CharRead::new(src.take((end - start) as u64));
+            let text = String::from_iter(text);
+            let text = text.lines()
                 .scan(start, |c, l| {
                     let start = *c;
                     *c += l.len() + 1;
@@ -116,8 +133,17 @@ impl Provenance {
                             Style::default().apply(posttext)
                         ),
                     )
-                }),
-        ))
+                }).collect::<Vec<_>>();
+
+            let digits = start.checked_ilog10().unwrap_or(0) + 1;
+            let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
+            let digits = digits as usize;
+
+            Some((
+                digits,
+                text
+            ))
+        })
     }
 }
 
@@ -126,84 +152,103 @@ pub struct FmtMessage<'a> {
     pointer: Style,
     kind: StyledStr<'a>,
     title: std::fmt::Arguments<'a>,
+    #[cfg(debug_assertions)]
+    origin: (u32, &'static str),
 }
 impl<'a> FmtMessage<'a> {
-    pub fn error(title: std::fmt::Arguments<'a>, span: Option<Provenance>) -> Self {
+    pub fn error(title: std::fmt::Arguments<'a>, origin: (u32, &'static str), span: Option<Provenance>) -> Self {
         Self {
             span,
             title,
             kind: Style::red().apply("Error"),
             pointer: Style::red().merge(Style::underline()),
+            #[cfg(debug_assertions)]
+            origin,
         }
     }
-    pub fn note(title: std::fmt::Arguments<'a>, span: Option<Provenance>) -> Self {
+    pub fn note(title: std::fmt::Arguments<'a>, origin: (u32, &'static str), span: Option<Provenance>) -> Self {
         Self {
             span,
             title,
             kind: Style::yellow().apply("Note"),
             pointer: Style::yellow().merge(Style::underline()),
+            #[cfg(debug_assertions)]
+            origin,
         }
     }
-    pub fn print_header(&self, ctx: &Ivec<ModuleId, Module>) {
+    pub fn print_header(&self, ctx: &data::files::Files) {
         print!("[{}]", self.kind);
         if let Some(src) = self.span.and_then(|s| s.source(ctx)) {
             print!("@{}", src);
         }
-        println!(": {}", self.title);
+        print!(": {}", self.title);
+
+        #[cfg(debug_assertions)]
+        print!(" (from {}@{})", self.origin.1, self.origin.0);
+
+        println!();
+    }
+    pub fn print_header_simple(&self) {
+        print!("[{}]: {}", self.kind, self.title);
+
+        #[cfg(debug_assertions)]
+        print!(" (from {}@{})", self.origin.1, self.origin.0);
+
+        println!();
     }
 }
 
 #[macro_export]
 macro_rules! message {
     (error => $fmt:literal) => {
-        $crate::FmtMessage::error(format_args!($fmt), None)
+        $crate::FmtMessage::error(format_args!($fmt), (line!(), file!()), None)
     };
     (error @ $span:expr => $fmt:literal) => {
-        $crate::FmtMessage::error(format_args!($fmt), Some($span))
+        $crate::FmtMessage::error(format_args!($fmt), (line!(), file!()), Some($span))
     };
     (error @? $span:expr => $fmt:literal) => {
-        $crate::FmtMessage::error(format_args!($fmt), $span)
+        $crate::FmtMessage::error(format_args!($fmt), (line!(), file!()), $span)
     };
     (error => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::error(format_args!($fmt, $($args)*), None)
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), (line!(), file!()), None)
     };
     (error @ $span:expr => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::error(format_args!($fmt, $($args)*), Some($span))
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), (line!(), file!()), Some($span))
     };
     (error @? $span:expr => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::error(format_args!($fmt, $($args)*), $span)
+        $crate::FmtMessage::error(format_args!($fmt, $($args)*), (line!(), file!()), $span)
     };
     (note => $fmt:literal) => {
-        $crate::FmtMessage::note(format_args!($fmt), None)
+        $crate::FmtMessage::note(format_args!($fmt), (line!(), file!()), None)
     };
     (note @ $span:expr => $fmt:literal) => {
-        $crate::FmtMessage::note(format_args!($fmt), Some($span))
+        $crate::FmtMessage::note(format_args!($fmt), (line!(), file!()), Some($span))
     };
     (note @? $span:expr => $fmt:literal) => {
-        $crate::FmtMessage::note(format_args!($fmt), $span)
+        $crate::FmtMessage::note(format_args!($fmt), (line!(), file!()), $span)
     };
     (note => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::note(format_args!($fmt, $($args)*), None)
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), (line!(), file!()), None)
     };
     (note @ $span:expr => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::note(format_args!($fmt, $($args)*), Some($span))
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), (line!(), file!()), Some($span))
     };
     (note @? $span:expr => $fmt:literal, $($args:tt)*) => {
-        $crate::FmtMessage::note(format_args!($fmt, $($args)*), $span)
+        $crate::FmtMessage::note(format_args!($fmt, $($args)*), (line!(), file!()), $span)
     };
 }
 
-pub fn report_simple(kind: StyledStr, title: &str, extra: Option<&str>) {
-    if let Some(extra) = extra {
-        println!("╭─[{}]: {}", kind, title);
-        println!("├─ {}", extra);
-        println!("╰────╯");
-    } else {
-        println!("[{}]: {}", kind, title);
+pub fn report_simple(title: FmtMessage, extra: &[FmtMessage]) {
+    print!("╭─");
+    title.print_header_simple();
+    for e in extra {
+        print!("├─");
+        e.print_header_simple();
     }
+    println!("╰───╯");
 }
 
-pub fn report(ctx: &Ivec<ModuleId, Module>, head: FmtMessage, extra: &[FmtMessage]) {
+pub fn report(ctx: &data::files::Files, head: FmtMessage, extra: &[FmtMessage]) {
     print!("╭─");
     head.print_header(ctx);
     let mut digits = extra
@@ -235,78 +280,121 @@ pub fn report(ctx: &Ivec<ModuleId, Module>, head: FmtMessage, extra: &[FmtMessag
 }
 
 fn main() {
-    let mut ctx = Tara::from("example/main.tara");
+    let Some(root_path) = std::env::args().nth(1) else {
+        report_simple(message!(error => "Please provide a path to the main file!"), &[]);
+        std::process::exit(1);
+    };
+
+    let files = data::files::Files::from(root_path.into());
+    files.print();
     report(
-        &ctx.modules,
-        FmtMessage {
-            span: Some(Provenance::Span {
-                module: ctx.entry,
+        &files,
+        message!(
+            note @ Provenance::Span {
+                module: files.root(),
                 start: 0,
-                end: ctx.get_source(ctx.entry).len(),
-            }),
-            pointer: Style::default(),
-            kind: Style::yellow().apply("Cat"),
-            title: format_args!(""),
-        },
+                end: files[files.root()].source_len,
+            } => ""
+        ),
         &[],
     );
 
-    let pi = ctx.preimport(preimport::In { m: ctx.entry });
-    report(
-        &ctx.modules,
-        FmtMessage {
-            span: None,
-            pointer: Style::default(),
-            kind: Style::yellow().apply("Ops"),
-            title: format_args!(""),
-        },
-        pi.ops
-            .iter()
-            .map(|o| FmtMessage {
-                span: Some(o.loc),
-                pointer: Style::underline(),
-                kind: Style::yellow().apply("Operator"),
-                title: format_args!(""),
-            })
-            .collect::<Vec<_>>()
-            .as_ref(),
-    );
-
-    dbg!(ctx.parse(parse::In { m: ctx.entry }).ast);
-
-    // let resolution = ctx.lower_uir(uir::In { m: ctx.entry });
-    let items = ctx.quir(quir::In { m: ctx.entry }).namespace;
-    let _start = ctx.quir_items[items].items.get(&"_start".into()).copied();
-    // let mut _start = None;
-    // for &i in ctx.quir_items[items].items.values() {
-    //     if let uir::Item::Function(f) = &ctx.uir_items[i] {
-    //         println!(
-    //             "{}",
-    //             f.fmt(
-    //                 &ctx.uir_interfaces[i].into_func_immut(),
-    //                 &ctx.uir_locals[i],
-    //                 &ctx.uir_interfaces,
-    //                 &ctx.uir_types,
-    //                 &ctx.uir_items,
-    //             )
+    // let mut scans = data::prescan::Scans::default();
+    // let mut scanmap = prescan::Map::default();
+    // let root = scanmap.query(files.root(), (&files, &mut scans));
+    // scans.print(root);
+    // let root = files.root();
+    // files[root].source.access(|src| {
+    //     let src = BufReader::new(src);
+    //     for t in Tokenizer::new(root, src).step_by(5) {
+    //         report(
+    //             &files,
+    //             message!(
+    //                 note @ t.loc
+    //                     => ""
+    //             ),
+    //             &[]
     //         );
     //     }
-    //     if ctx.item_name(i).name.0 == "_start" {
-    //         _start = Some(i);
+    // });
+
+    let mut parsemap = parse::Map::default();
+    let mut quir = convert::Data::default();
+    let mut quirmap = convert::Map::default();
+    // let ast = parsemap.query(modules.root(), (&modules, &mut scans, &mut scanmap, &mut imports, &mut importmap));
+    // let ast = parsemap.query(files.root(), (&files,));
+    // println!("{:#?}", &ast);
+    let qst = quirmap.query(files.root(), (&files, &mut parsemap, &mut quir));
+    // {
+    //     let ast = parsemap.query(files.root(), (&files,));
+    //     for f in &ast.funcs {
+    //         if f.name.name == "fib" {
+    //             dbg!(f);
+    //         }
     //     }
     // }
+    if let Some(quir::Id::Function(id)) = qst.index(&quir, "main") {
+        let func = &quir.items.funcs[id];
+        files.report(message!(note @ func.loc => "lol"), &[]);
+    }
+    // println!("{:#?}", &quir);
+    let mut resmap = resolve::Map::default();
+    resmap.query(qst, (&files, &quir));
 
-    ctx.codegen(codegen::In { i: _start.unwrap() });
-    match ctx.llvm_mod.verify() {
-        Ok(()) => {}
+    let mut tymap = typer::Map::default();
+    let mut fillmap = fill::Map::default();
+    let mut cgsmaps = codegen::Submaps::default();
+    let mut cgmap = codegen::Map::default();
+    let mut codegen = Codegen::new();
+    if let Some(id) = qst.index(&quir, "_start") {
+        cgmap.query(id, (&files, &mut quir, &mut cgsmaps, &mut tymap, &mut resmap, &mut fillmap, &mut codegen));
+    }
+    match codegen.module.verify() {
+        Ok(()) => {},
         Err(msg) => {
             println!("{}", msg.to_str().unwrap());
+            codegen.module.print_to_stderr();
             std::process::exit(1);
         }
     }
-
-    // Emit
-    ctx.target
-        .write_to_file(&ctx.llvm_mod, FileType::Object, "./out.o".as_ref())
+    codegen.target
+        .write_to_file(&codegen.module, FileType::Object, "./out.o".as_ref())
         .unwrap();
+
+
+    // // let resolution = ctx.lower_uir(uir::In { m: ctx.entry });
+    // let items = ctx.quir(quir::In { m: ctx.entry }).namespace;
+    // let _start = ctx.quir_items[items].items.get(&"_start".into()).copied();
+    // // let mut _start = None;
+    // // for &i in ctx.quir_items[items].items.values() {
+    // //     if let uir::Item::Function(f) = &ctx.uir_items[i] {
+    // //         println!(
+    // //             "{}",
+    // //             f.fmt(
+    // //                 &ctx.uir_interfaces[i].into_func_immut(),
+    // //                 &ctx.uir_locals[i],
+    // //                 &ctx.uir_interfaces,
+    // //                 &ctx.uir_types,
+    // //                 &ctx.uir_items,
+    // //             )
+    // //         );
+    // //     }
+    // //     if ctx.item_name(i).name.0 == "_start" {
+    // //         _start = Some(i);
+    // //     }
+    // // }
+
+    // ctx.codegen(codegen::In { i: _start.unwrap() });
+    // match ctx.llvm_mod.verify() {
+    //     Ok(()) => {}
+    //     Err(msg) => {
+    //         println!("{}", msg.to_str().unwrap());
+    //         std::process::exit(1);
+    //     }
+    // }
+
+    // // Emit
+    // ctx.target
+    //     .write_to_file(&ctx.llvm_mod, FileType::Object, "./out.o".as_ref())
+    //     .unwrap();
 }

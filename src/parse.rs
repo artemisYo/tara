@@ -1,314 +1,206 @@
+use std::{io::BufReader, rc::Rc};
 use std::fmt::Write;
-use std::rc::Rc;
 
 use crate::{
-    gen_query, message,
-    misc::{CheapClone, Istr},
-    preimport, prescan,
-    tokens::{Token, Tokenkind},
-    FmtMessage, Provenance,
+    control::{self, Query}, data::{
+        ast::*,
+        files::{self, Files},
+        Ident,
+    }, lexer::Tokenizer, message, tokens::{Token, Tokenkind}, FmtMessage, Provenance
 };
 
-use super::{prescan::Opdef, ModuleId, Tara};
+pub type Map = control::Qmap<files::Id, Rc<Ast>, Ast>;
+impl Query<files::Id, Rc<Ast>> for Ast {
+    type Inputs<'a> = (
+        &'a Files,
+    );
 
-#[derive(Clone, Debug)]
-pub struct Out {
-    pub ast: Rc<Ast>,
-}
-impl CheapClone for Out {}
+    fn query(
+        _: &mut Map,
+        &file: &files::Id,
+        (files,): Self::Inputs<'_>,
+    ) -> Rc<Ast> {
+        files[file].source.access(|src| {
+            let lexer = Tokenizer::new(file, BufReader::new(src));
+            let lexer = lexer.filter(|t| t.kind != Tokenkind::Comment);
+            let lexer = Strcat::new(lexer).peekable();
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
-pub struct In {
-    pub m: ModuleId,
-}
-
-#[derive(Debug)]
-pub struct Ast {
-    pub funcs: Vec<Function>,
-    pub types: Vec<Typedecl>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Ident {
-    pub name: Istr,
-    pub loc: Provenance,
-}
-
-#[derive(Debug)]
-pub struct Function {
-    pub loc: Provenance,
-    pub name: Ident,
-    pub ret: Type,
-    pub args: Binding,
-    pub body: Expr,
+            let mut parser = Parser {
+                srcs: files, module: file, tokens: lexer, ops: OPS,
+            };
+            let ast = parser.top();
+            Rc::new(ast)
+        })
+    }
 }
 
-#[derive(Debug)]
-pub struct Typedecl {
-    pub loc: Provenance,
-    pub name: Ident,
-    pub cases: Vec<Typecase>,
-}
+const OPS: &[Op] = {
+    use std::num::NonZero;
+    &[
+        Op { spelling: "+", lbp: NonZero::new(3), rbp: NonZero::new(4) },
+        Op { spelling: "-", lbp: NonZero::new(3), rbp: NonZero::new(4) },
 
-#[derive(Debug)]
-pub struct Typecase {
-    pub loc: Provenance,
-    pub name: Ident,
-    pub binding: Binding,
-}
+        Op { spelling: "<", lbp: NonZero::new(1), rbp: NonZero::new(2) },
+    ]
+};
 
-#[derive(Clone, Debug)]
-pub struct Type {
-    pub loc: Provenance,
-    pub kind: Typekind,
+struct Parser<'a, L: Iterator<Item = Token<&'static str>>> {
+    srcs: &'a Files,
+    module: files::Id,
+    tokens: std::iter::Peekable<Strcat<L, L::Item>>,
+    ops: &'a [Op],
 }
-impl Type {
-    pub fn unit(loc: Provenance) -> Self {
-        Type {
-            kind: Typekind::Call {
-                args: Box::new(Type {
-                    kind: Typekind::Bundle(Vec::new()),
-                    loc,
-                }),
-                func: Box::new(Type {
-                    kind: Typekind::Recall("tuple".into()),
-                    loc,
-                }),
-            },
-            loc,
+impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
+    fn dispatch<T>(
+        &mut self,
+        cases: &[Tokenkind],
+        body: &mut [&mut dyn FnMut(&mut Self) -> T],
+        default: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let Some(t) = self.peek() else {
+            return default(self);
+        };
+        for (i, &k) in cases.iter().enumerate() {
+            if k == t.kind {
+                return body[i](self);
+            }
         }
-    }
-}
-#[derive(Clone, Debug)]
-pub enum Typekind {
-    Func { args: Box<Type>, ret: Box<Type> },
-    Call { args: Box<Type>, func: Box<Type> },
-    Bundle(Vec<Type>),
-    Recall(Istr),
-}
-impl Default for Typekind {
-    fn default() -> Self {
-        Typekind::Bundle(Vec::new())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Binding {
-    pub loc: Provenance,
-    // pub kind: Box<dyn uir::BindingT>,
-    pub kind: binding::Kind,
-}
-
-pub mod binding {
-    use super::*;
-    use crate::{quir, CommonEnum};
-
-    CommonEnum! {
-        #[derive(Debug, Clone)]
-        pub enum Kind {
-            Empty: Empty,
-            Name: Name,
-            Tuple: Tuple,
-        }
-        pub(in crate::tara) &self.convert(mutable: bool, loc: Provenance, ctx: &mut dyn quir::Ctx) -> quir::BindingId;
+        default(self)
     }
 
-    #[derive(Debug, Clone)]
-    pub struct Empty;
-    #[derive(Debug, Clone)]
-    pub struct Name(pub Istr, pub Option<Type>);
-    #[derive(Debug, Clone)]
-    pub struct Tuple(pub Vec<Binding>);
-}
-
-#[derive(Clone, Debug)]
-pub struct Expr {
-    pub loc: Provenance,
-    // pub kind: Rc<dyn uir::ExprT>,
-    pub kind: expr::Exprkind,
-}
-
-pub mod expr {
-    use super::*;
-    use crate::{quir, CommonEnum};
-
-    CommonEnum! {
-        #[derive(Debug, Clone)]
-        pub enum Exprkind {
-            If: Box<If>,
-            Call: Box<Call>,
-            Tuple: Box<Tuple>,
-            Loop: Box<Loop>,
-            Bareblock: Box<Bareblock>,
-            Path: Box<Path>,
-            Number: Box<Number>,
-            String: Box<String>,
-            Bool: Box<Bool>,
-            Let: Box<Let>,
-            Mut: Box<Mut>,
-            Assign: Box<Assign>,
-            Break: Box<Break>,
-            Return: Box<Return>,
-            Const: Box<Const>,
-        }
-
-        pub(in crate::tara) &self.convert(loc: Provenance, ctx: &mut quir::ECtx) -> quir::ExprId;
+    #[inline]
+    fn peek(&mut self) -> Option<Token<&'static str>> {
+        self.tokens.peek().copied()
     }
 
-    #[derive(Debug, Clone)]
-    pub struct If {
-        pub cond: Expr,
-        pub smash: Expr,
-        pub pass: Expr,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct Call {
-        pub func: Expr,
-        pub args: Expr,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct Tuple(pub Vec<Expr>);
-    #[derive(Debug, Clone)]
-    pub struct Loop(pub Expr);
-    #[derive(Debug, Clone)]
-    pub struct Bareblock(pub Vec<Expr>);
-
-    #[derive(Debug, Clone)]
-    pub struct Path(pub Rc<[Ident]>);
-    #[derive(Debug, Clone)]
-    pub struct Number(pub Istr);
-    #[derive(Debug, Clone)]
-    pub struct String(pub Istr);
-    #[derive(Debug, Clone)]
-    pub struct Bool(pub Istr);
-
-    #[derive(Debug, Clone)]
-    pub struct Let(pub Binding, pub Expr);
-    #[derive(Debug, Clone)]
-    pub struct Mut(pub Binding, pub Expr);
-    #[derive(Debug, Clone)]
-    pub struct Assign(pub Ident, pub Expr);
-    #[derive(Debug, Clone)]
-    pub struct Break(pub Option<Expr>);
-    #[derive(Debug, Clone)]
-    pub struct Return(pub Option<Expr>);
-    #[derive(Debug, Clone)]
-    pub struct Const(pub Expr);
-}
-
-gen_query!(parse);
-fn parse(ctx: &mut Tara, i: In) -> Out {
-    let pp = ctx.prescan(prescan::In { m: i.m });
-    let pi = ctx.preimport(preimport::In { m: i.m });
-    let mut parser = Parser {
-        ctx,
-        m: i.m,
-        tokens: pp.tokens.as_ref(),
-        ops: pi.ops,
-    };
-    let ast = parser.top();
-    Out { ast: Rc::new(ast) }
-}
-
-struct Parser<'a> {
-    ctx: &'a mut Tara,
-    m: ModuleId,
-    tokens: &'a [Token<Istr>],
-    ops: Rc<[Opdef]>,
-}
-
-impl Parser<'_> {
-    fn n_peek(&self, n: usize) -> Option<Token<Istr>> {
-        self.tokens.get(n).copied()
-    }
-    fn peek(&self) -> Option<Token<Istr>> {
-        self.tokens.first().copied()
-    }
-
-    fn n_is(&self, n: usize, k: Tokenkind) -> bool {
-        self.n_peek(n).is_some_and(|t| t.kind == k)
-    }
-    fn next_is(&self, k: Tokenkind) -> bool {
+    #[inline]
+    fn next_is(&mut self, k: Tokenkind) -> bool {
         self.peek().is_some_and(|t| t.kind == k)
     }
-    fn next_is_text(&self, s: Istr) -> bool {
+    #[inline]
+    fn next_is_any(&mut self, ks: &[Tokenkind]) -> bool {
+        self.peek().is_some_and(|t| ks.contains(&t.kind))
+    }
+    #[inline]
+    fn next_is_text(&mut self, s: &'static str) -> bool {
         self.peek().is_some_and(|t| t.text == s)
     }
 
-    fn dispatch<T>(
-        &mut self,
-        if_: &[Tokenkind],
-        then: &mut [&mut dyn FnMut(&mut Self) -> T],
-        else_: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let Some(t) = self.peek() else {
-            return else_(self);
-        };
-        for (i, &k) in if_.iter().enumerate() {
-            if k == t.kind {
-                return then[i](self);
-            }
-        }
-        else_(self)
-    }
-
-    fn check(&mut self, k: Tokenkind) -> Option<Token<Istr>> {
-        if !self.next_is(k) {
-            return None;
-        }
-        Some(self.eat())
-    }
-    fn check_text(&mut self, t: Istr) -> Option<Token<Istr>> {
-        if !self.next_is_text(t) {
-            return None;
-        }
-        Some(self.eat())
-    }
-
-    fn eat(&mut self) -> Token<Istr> {
-        if self.tokens.is_empty() {
+    #[inline]
+    fn eat(&mut self) -> Token<&'static str> {
+        let Some(&out) = self.tokens.peek() else {
             self.unexpected_token(None, &[], &[]);
-        }
-        let out = self.tokens[0];
-        self.tokens = &self.tokens[1..];
+            #[cfg(debug_assertions)]
+            let _ = dbg!(std::backtrace::Backtrace::force_capture());
+            std::process::exit(1);
+        };
+        self.tokens.next();
         out
     }
-    fn expect(&mut self, k: Tokenkind, notes: &[FmtMessage]) -> Token<Istr> {
+    #[inline]
+    fn expect(&mut self, k: Tokenkind, notes: &[FmtMessage]) -> Token<&'static str> {
         if !self.next_is(k) {
-            self.unexpected_token(self.peek(), &[k], notes);
+            let next = self.peek();
+            self.unexpected_token(next, &[k], notes);
+            #[cfg(debug_assertions)]
+            let _ = dbg!(std::backtrace::Backtrace::force_capture());
             std::process::exit(1);
         }
         self.eat()
+    }
+    #[inline]
+    fn expect_any(&mut self, ks: &[Tokenkind], notes: &[FmtMessage]) -> Token<&'static str> {
+        if !self.next_is_any(ks) {
+            let next = self.peek();
+            self.unexpected_token(next, ks, notes);
+            #[cfg(debug_assertions)]
+            let _ = dbg!(std::backtrace::Backtrace::force_capture());
+            std::process::exit(1);
+        }
+        self.eat()
+    }
+    #[inline]
+    fn avoid(&mut self, k: Tokenkind, notes: &[FmtMessage]) {
+        if let Some(t) = self.check(k) {
+            let spell = k.spelling();
+            self.srcs.report(message!(error @ t.loc => "Unexpected token '{}'!", spell), notes);
+            #[cfg(debug_assertions)]
+            let _ = dbg!(std::backtrace::Backtrace::force_capture());
+            std::process::exit(1);
+        }
+    }
+
+    #[inline]
+    fn check(&mut self, k: Tokenkind) -> Option<Token<&'static str>> {
+        if !self.next_is(k) {
+            None
+        } else {
+            Some(self.eat())
+        }
+    }
+    #[inline]
+    fn check_text(&mut self, t: &'static str) -> Option<Token<&'static str>> {
+        if !self.next_is_text(t) {
+            None
+        } else {
+            Some(self.eat())
+        }
     }
 
     fn top(&mut self) -> Ast {
         let mut ast = Ast {
             funcs: Vec::new(),
             types: Vec::new(),
+            imports: Vec::new(),
         };
-        while !self.tokens.is_empty() {
+        while self.tokens.peek().is_some() {
             self.decls(&mut ast);
         }
         ast
     }
     fn decls(&mut self, ast: &mut Ast) {
-        let cases = &[Tokenkind::Func, Tokenkind::Type];
+        let cases = &[Tokenkind::Func, Tokenkind::Type, Tokenkind::Import];
         match self.dispatch(
             cases,
-            &mut [&mut |s| Ok(s.function()), &mut |s| Err(s.decls_type())],
+            &mut [
+                &mut |s| Ok(s.function()),
+                &mut |s| Err(Ok(s.decls_type())),
+                &mut |s| Err(Err(s.import())),
+            ],
             |s| {
-                s.unexpected_token(s.peek(), cases, &[]);
+                let t = s.peek();
+                s.unexpected_token(t, cases, &[]);
                 std::process::exit(1)
             },
         ) {
             Ok(f) => ast.funcs.push(f),
-            Err(t) => ast.types.push(t),
+            Err(Ok(t)) => ast.types.push(t),
+            Err(Err(i)) => ast.imports.push(i),
+        }
+    }
+
+    fn import(&mut self) -> Import {
+        let loc = self.expect(Tokenkind::Import, &[]).loc;
+        let part = self.expect(Tokenkind::Name, &[]);
+        let mut path: Vec<Ident> = vec![ part.into() ];
+        while self.check(Tokenkind::Slash).is_some() {
+            let part = self.expect_any(&[Tokenkind::Name, Tokenkind::Ellipsis], &[]);
+            path.push(part.into());
+            if part.kind == Tokenkind::Ellipsis {
+                break;
+            }
+        }
+        let loc = self.expect(Tokenkind::Semicolon, &[]).loc.meet(&loc);
+        Import {
+            path,
+            loc,
         }
     }
 
     fn decls_type(&mut self) -> Typedecl {
+        // 'type' name
+        //   { '=' variant
+        //   / body }
         let mut loc = self.expect(Tokenkind::Type, &[]).loc;
         let name = self.expect(Tokenkind::Name, &[]);
         let cases = if self.check(Tokenkind::Equals).is_some() {
@@ -331,6 +223,7 @@ impl Parser<'_> {
     }
 
     fn type_body(&mut self) -> (Vec<Typecase>, Provenance) {
+        // '{' variant '}'
         let loc = self.expect(Tokenkind::OpenBrace, &[]).loc;
         let mut cases = Vec::new();
         while !self.next_is(Tokenkind::CloseBrace) {
@@ -343,6 +236,7 @@ impl Parser<'_> {
     }
 
     fn type_variant(&mut self) -> Typecase {
+        // 'case' name '(' ... ')' ';'
         let loc = self.expect(Tokenkind::Case, &[]).loc;
         let name = self.expect(Tokenkind::Name, &[]);
         let binding = self.binding_parenthesised();
@@ -398,9 +292,44 @@ impl Parser<'_> {
         }
     }
 
+    // fn binding_constructor(&mut self) -> Binding {
+    //     let (path, loc) = self.path();
+    //     let fields = self.binding();
+    //     let whole_loc = loc.meet(&fields.loc);
+    //     Binding {
+    //         kind: Box::new(binding::Constructor {
+    //             constructor_loc: loc,
+    //             constructor: path,
+    //             fields,
+    //         })
+    //         .into(),
+    //         loc: whole_loc,
+    //     }
+    // }
+
     fn binding_name(&mut self) -> Binding {
-        let name = self.expect(Tokenkind::Name, &[]);
-        let mut loc = name.loc;
+        let part = self.expect(Tokenkind::Name, &[]);
+        let mut names = vec![Ident {
+            name: part.text,
+            loc: part.loc,
+        }];
+        let mut loc = part.loc;
+        while self.check(Tokenkind::Slash).is_some() {
+            let part = self.expect(Tokenkind::Name, &[]);
+            names.push(Ident {
+                name: part.text,
+                loc: part.loc,
+            });
+            loc = part.loc.meet(&loc);
+        }
+        let constructor_loc = loc;
+
+        let fields = if self.next_is(Tokenkind::OpenParen) {
+            Some(self.binding_parenthesised())
+        } else {
+            None
+        };
+
         let typ = if self.check(Tokenkind::Colon).is_some() {
             let t = self.type_();
             loc = loc.meet(&t.loc);
@@ -408,9 +337,18 @@ impl Parser<'_> {
         } else {
             None
         };
+
         Binding {
             loc,
-            kind: binding::Name(name.text, typ).into(),
+            kind: match (names.len(), fields) {
+                (_, Some(fields)) => Box::new(binding::Constructor {
+                    constructor_loc,
+                    constructor: names,
+                    fields,
+                }).into(),
+                // as all constructors have atleast an empty fields binding
+                (_, None) => binding::Name(names[0].name, typ).into(),
+            }
         }
     }
 
@@ -473,7 +411,7 @@ impl Parser<'_> {
     }
 
     fn type_op_left_first(&mut self) -> bool {
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.is_some() {
                 continue;
             }
@@ -485,7 +423,7 @@ impl Parser<'_> {
     }
 
     fn type_op_left(&mut self) -> Type {
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.is_some() {
                 continue;
             }
@@ -497,21 +435,22 @@ impl Parser<'_> {
                         args,
                         func: Box::new(Type {
                             loc: t.loc,
-                            kind: Typekind::Recall(t.text),
+                            kind: Typekind::Recall(vec![t.into()]),
                         }),
                     },
                 };
             }
         }
-        self.unexpected_token(self.peek(), &[], &[]);
+        let fin = self.peek();
+        self.unexpected_token(fin, &[], &[]);
         std::process::exit(1);
     }
 
-    fn type_op_right_first(&self, prec: u32) -> bool {
+    fn type_op_right_first(&mut self, prec: u32) -> bool {
         if self.next_is(Tokenkind::OpenParen) {
             return true;
         }
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
             }
@@ -533,7 +472,7 @@ impl Parser<'_> {
                 },
             };
         }
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
             }
@@ -553,7 +492,7 @@ impl Parser<'_> {
                         args,
                         func: Box::new(Type {
                             loc: t.loc,
-                            kind: Typekind::Recall(t.text),
+                            kind: Typekind::Recall(vec![t.into()]),
                         }),
                     },
                 };
@@ -566,10 +505,10 @@ impl Parser<'_> {
         if self.next_is(Tokenkind::OpenParen) {
             self.type_parenthesised()
         } else {
-            let t = self.expect(Tokenkind::Name, &[]);
+            let (path, loc) = self.path();
             Type {
-                loc: t.loc,
-                kind: Typekind::Recall(t.text),
+                kind: Typekind::Recall(path),
+                loc,
             }
         }
     }
@@ -657,7 +596,8 @@ impl Parser<'_> {
                 &mut Self::expr_bareblock,
             ],
             |s| {
-                s.unexpected_token(s.peek(), cases, &[]);
+                let t = s.peek();
+                s.unexpected_token(t, cases, &[]);
                 std::process::exit(1);
             },
         )
@@ -666,19 +606,32 @@ impl Parser<'_> {
     fn expr_if(&mut self) -> Expr {
         let loc = self.expect(Tokenkind::If, &[]).loc;
         let cond = self.expr_any();
-        let smash = self.expr_block();
-        let pass = if self.check(Tokenkind::Else).is_some() {
+        self.avoid(Tokenkind::If, &[
+            message!(note => "If-expressions may not contain another if-expression without indirection!"),
+            message!(note => "Parenthesise the inner if-expression!"),
+            ]);
+        let smash = if self.check(Tokenkind::Equals).is_some() {
+            self.expr_any()
+        } else {
             self.expr_block()
+        };
+        let pass = if self.check(Tokenkind::Else).is_some() {
+            self.expr_any()
         } else {
             Expr {
                 loc: smash.loc,
-                kind: Box::new(expr::Tuple(vec![])).into(),
+                kind: Rc::new(expr::Tuple(vec![])).into(),
             }
         };
         let loc = loc.meet(&pass.loc);
         Expr {
             loc,
-            kind: Box::new(expr::If { cond, smash, pass }).into(),
+            kind: Rc::new(expr::If {
+                cond,
+                smash,
+                pass,
+            })
+            .into(),
         }
     }
 
@@ -688,7 +641,7 @@ impl Parser<'_> {
         let loc = loc.meet(&body.loc);
         Expr {
             loc,
-            kind: Box::new(expr::Loop(body)).into(),
+            kind: Rc::new(expr::Loop(body)).into(),
         }
     }
 
@@ -700,7 +653,7 @@ impl Parser<'_> {
             if let Some(t) = self.check(Tokenkind::Semicolon) {
                 body.push(Expr {
                     loc: t.loc,
-                    kind: Box::new(expr::Const(e)).into(),
+                    kind: Rc::new(expr::Const(e)).into(),
                 });
             } else {
                 body.push(e);
@@ -717,12 +670,22 @@ impl Parser<'_> {
         );
         Expr {
             loc,
-            kind: Box::new(expr::Bareblock(body)).into(),
+            kind: Rc::new(expr::Bareblock(body)).into(),
         }
     }
 
     fn expr_inline(&mut self) -> Expr {
-        self.expr_op(0)
+        let left = self.expr_op(0);
+        if self.check(Tokenkind::Equals).is_some() {
+            let right = self.expr_any();
+            let loc = left.loc.meet(&right.loc);
+            Expr {
+                kind: Rc::new(expr::Assign(left, right)).into(),
+                loc
+            }
+        } else {
+            left
+        }
     }
 
     fn expr_op(&mut self, prec: u32) -> Expr {
@@ -738,7 +701,7 @@ impl Parser<'_> {
     }
 
     fn expr_op_left_first(&mut self) -> bool {
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.is_some() {
                 continue;
             }
@@ -750,22 +713,22 @@ impl Parser<'_> {
     }
 
     fn expr_op_left(&mut self) -> Expr {
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.is_some() {
                 continue;
             }
             if let Some(t) = self.check_text(o.spelling) {
                 let args = self.expr_op(o.rbp.unwrap().get());
-                let path = Rc::new([Ident {
+                let path = vec![Ident {
                     name: t.text,
                     loc: t.loc,
-                }]);
+                }];
                 return Expr {
                     loc: t.loc.meet(&args.loc),
-                    kind: Box::new(expr::Call {
+                    kind: Rc::new(expr::Call {
                         func: Expr {
                             loc: t.loc,
-                            kind: Box::new(expr::Path(path)).into(),
+                            kind: Rc::new(expr::Path(path)).into(),
                         },
                         args,
                     })
@@ -773,15 +736,16 @@ impl Parser<'_> {
                 };
             }
         }
-        self.unexpected_token(self.peek(), &[], &[]);
+        let fin = self.peek();
+        self.unexpected_token(fin, &[], &[]);
         std::process::exit(1);
     }
 
-    fn expr_op_right_first(&self, prec: u32) -> bool {
+    fn expr_op_right_first(&mut self, prec: u32) -> bool {
         if self.next_is(Tokenkind::OpenParen) {
             return true;
         }
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
             }
@@ -797,10 +761,10 @@ impl Parser<'_> {
             let args = self.expr_parenthesised();
             return Expr {
                 loc: left.loc.meet(&args.loc),
-                kind: Box::new(expr::Call { func: left, args }).into(),
+                kind: Rc::new(expr::Call { func: left, args }).into(),
             };
         }
-        for o in self.ops.clone().iter() {
+        for o in self.ops.iter() {
             if o.lbp.map_or(true, |lbp| lbp.get() < prec) {
                 continue;
             }
@@ -809,21 +773,21 @@ impl Parser<'_> {
                     let right = self.expr_op(rbp.get());
                     Expr {
                         loc: left.loc.meet(&right.loc),
-                        kind: Box::new(expr::Tuple(vec![left, right])).into(),
+                        kind: Rc::new(expr::Tuple(vec![left, right])).into(),
                     }
                 } else {
                     left
                 };
-                let path = Rc::new([Ident {
+                let path = vec![Ident {
                     name: t.text,
                     loc: t.loc,
-                }]);
+                }];
                 return Expr {
                     loc: args.loc.meet(&t.loc),
-                    kind: Box::new(expr::Call {
+                    kind: Rc::new(expr::Call {
                         func: Expr {
                             loc: t.loc,
-                            kind: Box::new(expr::Path(path)).into(),
+                            kind: Rc::new(expr::Path(path)).into(),
                         },
                         args,
                     })
@@ -839,23 +803,12 @@ impl Parser<'_> {
         let t = self.peek();
         match t.map(|t| t.kind) {
             Some(OpenParen) => self.expr_parenthesised(),
+            Some(Let) => self.expr_let(),
+            Some(Mut) => self.expr_mut(),
             Some(Name) => {
-                let part = self.eat();
-                let mut names = vec![Ident {
-                    name: part.text,
-                    loc: part.loc,
-                }];
-                let mut loc = part.loc;
-                while self.check(Tokenkind::Slash).is_some() {
-                    let part = self.expect(Tokenkind::Name, &[]);
-                    names.push(Ident {
-                        name: part.text,
-                        loc: part.loc,
-                    });
-                    loc = loc.meet(&part.loc);
-                }
+                let (names, loc) = self.path();
                 Expr {
-                    kind: Box::new(expr::Path(names.into())).into(),
+                    kind: Rc::new(expr::Path(names)).into(),
                     loc,
                 }
             }
@@ -863,21 +816,21 @@ impl Parser<'_> {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Box::new(expr::Number(t.text)).into(),
+                    kind: Rc::new(expr::Number(t.text)).into(),
                 }
             }
             Some(String) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Box::new(expr::String(t.text)).into(),
+                    kind: Rc::new(expr::String(t.text)).into(),
                 }
             }
             Some(Bool) => {
                 let t = self.eat();
                 Expr {
                     loc: t.loc,
-                    kind: Box::new(expr::Bool(t.text)).into(),
+                    kind: Rc::new(expr::Bool(t.text)).into(),
                 }
             }
             _ => {
@@ -885,6 +838,24 @@ impl Parser<'_> {
                 std::process::exit(1);
             }
         }
+    }
+
+    fn path(&mut self) -> (Vec<Ident>, Provenance) {
+        let part = self.expect(Tokenkind::Name, &[]);
+        let mut names = vec![Ident {
+            name: part.text,
+            loc: part.loc,
+        }];
+        let mut loc = part.loc;
+        while self.check(Tokenkind::Slash).is_some() {
+            let part = self.expect(Tokenkind::Name, &[]);
+            names.push(Ident {
+                name: part.text,
+                loc: part.loc,
+            });
+            loc = loc.meet(&part.loc);
+        }
+        (names, loc)
     }
 
     fn expr_parenthesised(&mut self) -> Expr {
@@ -915,36 +886,12 @@ impl Parser<'_> {
             1 => fields.pop().unwrap(),
             _ => Expr {
                 loc,
-                kind: Box::new(expr::Tuple(fields)).into(),
+                kind: Rc::new(expr::Tuple(fields)).into(),
             },
         }
     }
 
-    fn statement(&mut self) -> Expr {
-        self.dispatch(
-            &[
-                Tokenkind::Let,
-                Tokenkind::Mut,
-                Tokenkind::Break,
-                Tokenkind::Return,
-            ],
-            &mut [
-                &mut Self::statement_let,
-                &mut Self::statement_mut,
-                &mut Self::statement_break,
-                &mut Self::statement_return,
-            ],
-            |s| {
-                if s.n_is(1, Tokenkind::Equals) {
-                    s.statement_assign()
-                } else {
-                    s.expr_any()
-                }
-            },
-        )
-    }
-
-    fn statement_let(&mut self) -> Expr {
+    fn expr_let(&mut self) -> Expr {
         let loc = self.expect(Tokenkind::Let, &[]).loc;
         let binding = self.binding();
         self.expect(Tokenkind::Equals, &[]);
@@ -952,11 +899,11 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Box::new(expr::Let(binding, init)).into(),
+            kind: Rc::new(expr::Let(binding, init)).into(),
         }
     }
 
-    fn statement_mut(&mut self) -> Expr {
+    fn expr_mut(&mut self) -> Expr {
         let loc = self.expect(Tokenkind::Mut, &[]).loc;
         let binding = self.binding();
         self.expect(Tokenkind::Equals, &[]);
@@ -964,8 +911,27 @@ impl Parser<'_> {
         let loc = loc.meet(&init.loc);
         Expr {
             loc,
-            kind: Box::new(expr::Mut(binding, init)).into(),
+            kind: Rc::new(expr::Mut(binding, init)).into(),
         }
+    }
+
+    fn statement(&mut self) -> Expr {
+        self.dispatch(
+            &[
+                Tokenkind::Break,
+                Tokenkind::Return,
+            ],
+            &mut [
+                &mut Self::statement_break,
+                &mut Self::statement_return,
+            ],
+            |s| s.expr_any(),
+                // if s.n_is(1, Tokenkind::Equals) {
+                //     s.statement_assign()
+                // } else {
+                //     s.expr_any()
+                // }
+        )
     }
 
     fn statement_break(&mut self) -> Expr {
@@ -978,7 +944,7 @@ impl Parser<'_> {
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Box::new(expr::Break(val)).into(),
+            kind: Rc::new(expr::Break(val)).into(),
         }
     }
 
@@ -992,27 +958,27 @@ impl Parser<'_> {
         let loc = loc.meet(val.as_ref().map_or(&loc, |v| &v.loc));
         Expr {
             loc,
-            kind: Box::new(expr::Return(val)).into(),
+            kind: Rc::new(expr::Return(val)).into(),
         }
     }
 
-    fn statement_assign(&mut self) -> Expr {
-        let name = self.expect(Tokenkind::Name, &[]);
-        let loc = name.loc;
-        self.expect(Tokenkind::Equals, &[]);
-        let val = self.expr_any();
-        let loc = loc.meet(&val.loc);
-        let name = Ident {
-            name: name.text,
-            loc: name.loc,
-        };
-        Expr {
-            loc,
-            kind: Box::new(expr::Assign(name, val)).into(),
-        }
-    }
+    // fn statement_assign(&mut self) -> Expr {
+    //     let name = self.expect(Tokenkind::Name, &[]);
+    //     let loc = name.loc;
+    //     self.expect(Tokenkind::Equals, &[]);
+    //     let val = self.expr_any();
+    //     let loc = loc.meet(&val.loc);
+    //     let name = Ident {
+    //         name: name.text,
+    //         loc: name.loc,
+    //     };
+    //     Expr {
+    //         loc,
+    //         kind: Rc::new(expr::Assign(name, val)).into(),
+    //     }
+    // }
 
-    fn unexpected_token(&self, t: Option<Token<Istr>>, exps: &[Tokenkind], notes: &[FmtMessage]) {
+     fn unexpected_token(&self, t: Option<Token<&str>>, exps: &[Tokenkind], notes: &[FmtMessage]) {
         let spell = t.map_or("EOF", |t| t.kind.spelling());
         let title = match exps.len() {
             0 => format!("Unexpected token '{}'!", spell),
@@ -1025,9 +991,97 @@ impl Parser<'_> {
                 _ = write!(title, "but got '{}'!", spell);
                 title
             }
-        };
-        let loc = t.map_or(self.ctx.eof_loc(self.m), |t| t.loc);
-        // self.ctx.report(Message::error(&title, Some(loc)), notes);
-        self.ctx.report(message!(error @ loc => "{}", title), notes);
+        }; 
+        let loc = t.map_or(self.srcs.eof_loc(self.module), |t| t.loc);
+        self.srcs.report(message!(error @ loc => "{}", title), notes);
     }
 }
+
+impl Type {
+    fn unit(loc: Provenance) -> Self {
+        Type {
+            kind: Typekind::Call {
+                args: Box::new(Type {
+                    kind: Typekind::Bundle(Vec::new()),
+                    loc
+                }),
+                func: Box::new(Type {
+                    kind: Typekind::Recall(vec![Ident {
+                        name: "tuple",
+                        loc,
+                    }]),
+                    loc
+                }),
+            },
+            loc
+        }
+    }
+}
+
+impl From<Token<&'static str>> for Ident {
+    fn from(t: Token<&'static str>) -> Self {
+        Self {
+            name: t.text,
+            loc: t.loc
+        }
+    }
+}
+
+
+struct Strcat<L: Iterator<Item = I>, I>(std::iter::Peekable<L>);
+impl<L: Iterator<Item = Token<&'static str>>> Strcat<L, L::Item> {
+    fn new(l: L) -> Self {
+        Self(l.peekable())
+    }
+}
+impl<L: Iterator<Item = Token<&'static str>>> Iterator for Strcat<L, L::Item> {
+    type Item = Token<&'static str>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        fn cat(b: &mut String, s: &str) {
+            let s = s.strip_prefix('"').expect("strings should always be quoted");
+            b.reserve(s.len());
+            let iter = s.chars();
+            let iter = iter.scan(false, |state, elem| {
+                let current = *state;
+                *state = elem == '\\' && !*state;
+                Some((current, elem))
+            });
+            for c in iter {
+                match c {
+                    (false, '"') => break,
+                    (false, '\\') => {},
+                    (false, '\n') => {
+                        b.push('\n');
+                        break;
+                    }
+                    (true, '\n') => break,
+                    (true, '0') => b.push('\0'),
+                    (true, 'n') => b.push('\n'),
+                    (true, 't') => b.push('\t'),
+                    (_, c) => b.push(c),
+                }
+            }
+        }
+
+        let t = self.0.next()?;
+        if t.kind != Tokenkind::String {
+            return Some(t);
+        }
+        let mut text = String::new();
+        let mut loc = t.loc;
+        cat(&mut text, t.text);
+        while let Some(&t) = self.0.peek().filter(|t| t.kind == Tokenkind::String) {
+            self.0.next();
+            loc = t.loc.meet(&loc);
+            cat(&mut text, t.text);
+        }
+
+        Some(Token {
+            kind: Tokenkind::String,
+            text: text.leak(),
+            loc,
+        })
+    }
+}
+
