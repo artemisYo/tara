@@ -1,32 +1,34 @@
-use std::{io::BufReader, rc::Rc};
 use std::fmt::Write;
+use std::{io::BufReader, rc::Rc};
 
 use crate::{
-    control::{self, Query}, data::{
+    control::{self, Query},
+    data::{
         ast::*,
         files::{self, Files},
         Ident,
-    }, lexer::Tokenizer, message, tokens::{Token, Tokenkind}, FmtMessage, Provenance
+    },
+    lexer::Tokenizer,
+    message,
+    tokens::{Token, Tokenkind},
+    FmtMessage, Provenance,
 };
 
 pub type Map = control::Qmap<files::Id, Rc<Ast>, Ast>;
 impl Query<files::Id, Rc<Ast>> for Ast {
-    type Inputs<'a> = (
-        &'a Files,
-    );
+    type Inputs<'a> = (&'a Files,);
 
-    fn query(
-        _: &mut Map,
-        &file: &files::Id,
-        (files,): Self::Inputs<'_>,
-    ) -> Rc<Ast> {
+    fn query(_: &mut Map, &file: &files::Id, (files,): Self::Inputs<'_>) -> Rc<Ast> {
         files[file].source.access(|src| {
             let lexer = Tokenizer::new(file, BufReader::new(src));
             let lexer = lexer.filter(|t| t.kind != Tokenkind::Comment);
             let lexer = Strcat::new(lexer).peekable();
 
             let mut parser = Parser {
-                srcs: files, module: file, tokens: lexer, ops: OPS,
+                srcs: files,
+                module: file,
+                tokens: lexer,
+                ops: OPS,
             };
             let ast = parser.top();
             Rc::new(ast)
@@ -37,10 +39,66 @@ impl Query<files::Id, Rc<Ast>> for Ast {
 const OPS: &[Op] = {
     use std::num::NonZero;
     &[
-        Op { spelling: "+", lbp: NonZero::new(3), rbp: NonZero::new(4) },
-        Op { spelling: "-", lbp: NonZero::new(3), rbp: NonZero::new(4) },
-
-        Op { spelling: "<", lbp: NonZero::new(1), rbp: NonZero::new(2) },
+        Op {
+            spelling: "<",
+            lbp: NonZero::new(1),
+            rbp: NonZero::new(1),
+        },
+        Op {
+            spelling: "<=",
+            lbp: NonZero::new(1),
+            rbp: NonZero::new(1),
+        },
+        Op {
+            spelling: ">",
+            lbp: NonZero::new(1),
+            rbp: NonZero::new(1),
+        },
+        Op {
+            spelling: ">=",
+            lbp: NonZero::new(1),
+            rbp: NonZero::new(1),
+        },
+        Op {
+            spelling: "==",
+            lbp: NonZero::new(1),
+            rbp: NonZero::new(1),
+        },
+        Op {
+            spelling: "&",
+            lbp: NonZero::new(3),
+            rbp: NonZero::new(2),
+        },
+        Op {
+            spelling: "|",
+            lbp: NonZero::new(3),
+            rbp: NonZero::new(2),
+        },
+        Op {
+            spelling: "<<",
+            lbp: NonZero::new(3),
+            rbp: NonZero::new(2),
+        },
+        Op {
+            spelling: ">>",
+            lbp: NonZero::new(3),
+            rbp: NonZero::new(2),
+        },
+        Op {
+            spelling: "+",
+            lbp: NonZero::new(4),
+            rbp: NonZero::new(5),
+        },
+        Op {
+            spelling: "-",
+            lbp: NonZero::new(4),
+            rbp: NonZero::new(5),
+        },
+        Op {
+            spelling: "~",
+            lbp: None,
+            rbp: NonZero::new(6),
+        },
     ]
 };
 
@@ -123,7 +181,10 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
     fn avoid(&mut self, k: Tokenkind, notes: &[FmtMessage]) {
         if let Some(t) = self.check(k) {
             let spell = k.spelling();
-            self.srcs.report(message!(error @ t.loc => "Unexpected token '{}'!", spell), notes);
+            self.srcs.report(
+                message!(error @ t.loc => "Unexpected token '{}'!", spell),
+                notes,
+            );
             #[cfg(debug_assertions)]
             let _ = dbg!(std::backtrace::Backtrace::force_capture());
             std::process::exit(1);
@@ -181,20 +242,22 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
 
     fn import(&mut self) -> Import {
         let loc = self.expect(Tokenkind::Import, &[]).loc;
-        let part = self.expect(Tokenkind::Name, &[]);
-        let mut path: Vec<Ident> = vec![ part.into() ];
+        let part = self
+            .check(Tokenkind::Name)
+            .unwrap_or_else(|| self.expect(Tokenkind::Return, &[]));
+        let mut path: Vec<Ident> = vec![part.into()];
         while self.check(Tokenkind::Slash).is_some() {
-            let part = self.expect_any(&[Tokenkind::Name, Tokenkind::Ellipsis], &[]);
+            let part = self.expect_any(
+                &[Tokenkind::Name, Tokenkind::Return, Tokenkind::Ellipsis],
+                &[],
+            );
             path.push(part.into());
             if part.kind == Tokenkind::Ellipsis {
                 break;
             }
         }
         let loc = self.expect(Tokenkind::Semicolon, &[]).loc.meet(&loc);
-        Import {
-            path,
-            loc,
-        }
+        Import { path, loc }
     }
 
     fn decls_type(&mut self) -> Typedecl {
@@ -345,10 +408,11 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
                     constructor_loc,
                     constructor: names,
                     fields,
-                }).into(),
+                })
+                .into(),
                 // as all constructors have atleast an empty fields binding
                 (_, None) => binding::Name(names[0].name, typ).into(),
-            }
+            },
         }
     }
 
@@ -626,12 +690,7 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
         let loc = loc.meet(&pass.loc);
         Expr {
             loc,
-            kind: Rc::new(expr::If {
-                cond,
-                smash,
-                pass,
-            })
-            .into(),
+            kind: Rc::new(expr::If { cond, smash, pass }).into(),
         }
     }
 
@@ -681,7 +740,7 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
             let loc = left.loc.meet(&right.loc);
             Expr {
                 kind: Rc::new(expr::Assign(left, right)).into(),
-                loc
+                loc,
             }
         } else {
             left
@@ -917,20 +976,14 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
 
     fn statement(&mut self) -> Expr {
         self.dispatch(
-            &[
-                Tokenkind::Break,
-                Tokenkind::Return,
-            ],
-            &mut [
-                &mut Self::statement_break,
-                &mut Self::statement_return,
-            ],
+            &[Tokenkind::Break, Tokenkind::Return],
+            &mut [&mut Self::statement_break, &mut Self::statement_return],
             |s| s.expr_any(),
-                // if s.n_is(1, Tokenkind::Equals) {
-                //     s.statement_assign()
-                // } else {
-                //     s.expr_any()
-                // }
+            // if s.n_is(1, Tokenkind::Equals) {
+            //     s.statement_assign()
+            // } else {
+            //     s.expr_any()
+            // }
         )
     }
 
@@ -978,7 +1031,7 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
     //     }
     // }
 
-     fn unexpected_token(&self, t: Option<Token<&str>>, exps: &[Tokenkind], notes: &[FmtMessage]) {
+    fn unexpected_token(&self, t: Option<Token<&str>>, exps: &[Tokenkind], notes: &[FmtMessage]) {
         let spell = t.map_or("EOF", |t| t.kind.spelling());
         let title = match exps.len() {
             0 => format!("Unexpected token '{}'!", spell),
@@ -991,9 +1044,10 @@ impl<L: Iterator<Item = Token<&'static str>>> Parser<'_, L> {
                 _ = write!(title, "but got '{}'!", spell);
                 title
             }
-        }; 
+        };
         let loc = t.map_or(self.srcs.eof_loc(self.module), |t| t.loc);
-        self.srcs.report(message!(error @ loc => "{}", title), notes);
+        self.srcs
+            .report(message!(error @ loc => "{}", title), notes);
     }
 }
 
@@ -1003,17 +1057,14 @@ impl Type {
             kind: Typekind::Call {
                 args: Box::new(Type {
                     kind: Typekind::Bundle(Vec::new()),
-                    loc
+                    loc,
                 }),
                 func: Box::new(Type {
-                    kind: Typekind::Recall(vec![Ident {
-                        name: "tuple",
-                        loc,
-                    }]),
-                    loc
+                    kind: Typekind::Recall(vec![Ident { name: "tuple", loc }]),
+                    loc,
                 }),
             },
-            loc
+            loc,
         }
     }
 }
@@ -1022,11 +1073,10 @@ impl From<Token<&'static str>> for Ident {
     fn from(t: Token<&'static str>) -> Self {
         Self {
             name: t.text,
-            loc: t.loc
+            loc: t.loc,
         }
     }
 }
-
 
 struct Strcat<L: Iterator<Item = I>, I>(std::iter::Peekable<L>);
 impl<L: Iterator<Item = Token<&'static str>>> Strcat<L, L::Item> {
@@ -1039,7 +1089,9 @@ impl<L: Iterator<Item = Token<&'static str>>> Iterator for Strcat<L, L::Item> {
 
     fn next(&mut self) -> Option<Self::Item> {
         fn cat(b: &mut String, s: &str) {
-            let s = s.strip_prefix('"').expect("strings should always be quoted");
+            let s = s
+                .strip_prefix('"')
+                .expect("strings should always be quoted");
             b.reserve(s.len());
             let iter = s.chars();
             let iter = iter.scan(false, |state, elem| {
@@ -1050,7 +1102,7 @@ impl<L: Iterator<Item = Token<&'static str>>> Iterator for Strcat<L, L::Item> {
             for c in iter {
                 match c {
                     (false, '"') => break,
-                    (false, '\\') => {},
+                    (false, '\\') => {}
                     (false, '\n') => {
                         b.push('\n');
                         break;
@@ -1084,4 +1136,3 @@ impl<L: Iterator<Item = Token<&'static str>>> Iterator for Strcat<L, L::Item> {
         })
     }
 }
-

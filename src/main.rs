@@ -1,23 +1,23 @@
 mod ansi;
+mod codegen;
+mod control;
+mod convert;
+mod data;
+mod fill;
 mod lexer;
 mod misc;
-mod tokens;
-mod control;
-mod data;
 mod modules;
 mod parse;
-mod convert;
 mod resolve;
+mod tokens;
 mod typer;
-mod fill;
-mod codegen;
 
 use std::io::{BufReader, Read, Seek, SeekFrom};
 
+use ansi::*;
 use data::{quir, Codegen};
 use inkwell::targets::FileType;
 use misc::{CharRead, Ivec};
-use ansi::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provenance {
@@ -88,9 +88,11 @@ impl Provenance {
             let src_len = source.source_len;
             let mut src = BufReader::new(src_file);
 
-            src.seek(SeekFrom::Start(span_start.saturating_sub(1024) as u64)).unwrap();
+            src.seek(SeekFrom::Start(span_start.saturating_sub(1024) as u64))
+                .unwrap();
             let start = src.take(span_start.min(1024) as u64).bytes();
-            let start = start.filter_map(|i| i.ok())
+            let start = start
+                .filter_map(|i| i.ok())
                 .enumerate()
                 .filter(|(_, c)| *c == b'\n')
                 .last()
@@ -100,7 +102,8 @@ impl Provenance {
 
             let mut src = BufReader::new(src_file);
             src.seek(SeekFrom::Start(span_end as u64)).unwrap();
-            let end = src.bytes()
+            let end = src
+                .bytes()
                 .filter_map(|i| i.ok())
                 .enumerate()
                 .filter(|(_, c)| *c == b'\n')
@@ -112,7 +115,8 @@ impl Provenance {
             src.seek(SeekFrom::Start(start as u64)).unwrap();
             let text = CharRead::new(src.take((end - start) as u64));
             let text = String::from_iter(text);
-            let text = text.lines()
+            let text = text
+                .lines()
                 .scan(start, |c, l| {
                     let start = *c;
                     *c += l.len() + 1;
@@ -133,16 +137,14 @@ impl Provenance {
                             Style::default().apply(posttext)
                         ),
                     )
-                }).collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
 
             let digits = start.checked_ilog10().unwrap_or(0) + 1;
             let digits = digits.max(end.checked_ilog10().unwrap_or(0) + 1);
             let digits = digits as usize;
 
-            Some((
-                digits,
-                text
-            ))
+            Some((digits, text))
         })
     }
 }
@@ -156,7 +158,11 @@ pub struct FmtMessage<'a> {
     origin: (u32, &'static str),
 }
 impl<'a> FmtMessage<'a> {
-    pub fn error(title: std::fmt::Arguments<'a>, origin: (u32, &'static str), span: Option<Provenance>) -> Self {
+    pub fn error(
+        title: std::fmt::Arguments<'a>,
+        origin: (u32, &'static str),
+        span: Option<Provenance>,
+    ) -> Self {
         Self {
             span,
             title,
@@ -166,7 +172,11 @@ impl<'a> FmtMessage<'a> {
             origin,
         }
     }
-    pub fn note(title: std::fmt::Arguments<'a>, origin: (u32, &'static str), span: Option<Provenance>) -> Self {
+    pub fn note(
+        title: std::fmt::Arguments<'a>,
+        origin: (u32, &'static str),
+        span: Option<Provenance>,
+    ) -> Self {
         Self {
             span,
             title,
@@ -281,7 +291,10 @@ pub fn report(ctx: &data::files::Files, head: FmtMessage, extra: &[FmtMessage]) 
 
 fn main() {
     let Some(root_path) = std::env::args().nth(1) else {
-        report_simple(message!(error => "Please provide a path to the main file!"), &[]);
+        report_simple(
+            message!(error => "Please provide a path to the main file!"),
+            &[],
+        );
         std::process::exit(1);
     };
 
@@ -320,11 +333,12 @@ fn main() {
 
     let mut parsemap = parse::Map::default();
     let mut quir = convert::Data::default();
+    let quir_root = quir.root();
     let mut quirmap = convert::Map::default();
     // let ast = parsemap.query(modules.root(), (&modules, &mut scans, &mut scanmap, &mut imports, &mut importmap));
     // let ast = parsemap.query(files.root(), (&files,));
     // println!("{:#?}", &ast);
-    let qst = quirmap.query(files.root(), (&files, &mut parsemap, &mut quir));
+    let qst = quirmap.query(files.root(), (&files, &mut parsemap, &mut quir, quir_root));
     // {
     //     let ast = parsemap.query(files.root(), (&files,));
     //     for f in &ast.funcs {
@@ -347,20 +361,31 @@ fn main() {
     let mut cgmap = codegen::Map::default();
     let mut codegen = Codegen::new();
     if let Some(id) = qst.index(&quir, "_start") {
-        cgmap.query(id, (&files, &mut quir, &mut cgsmaps, &mut tymap, &mut resmap, &mut fillmap, &mut codegen));
+        cgmap.query(
+            id,
+            (
+                &files,
+                &mut quir,
+                &mut cgsmaps,
+                &mut tymap,
+                &mut resmap,
+                &mut fillmap,
+                &mut codegen,
+            ),
+        );
     }
     match codegen.module.verify() {
-        Ok(()) => {},
+        Ok(()) => {}
         Err(msg) => {
             println!("{}", msg.to_str().unwrap());
             codegen.module.print_to_stderr();
             std::process::exit(1);
         }
     }
-    codegen.target
+    codegen
+        .target
         .write_to_file(&codegen.module, FileType::Object, "./out.o".as_ref())
         .unwrap();
-
 
     // // let resolution = ctx.lower_uir(uir::In { m: ctx.entry });
     // let items = ctx.quir(quir::In { m: ctx.entry }).namespace;

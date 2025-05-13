@@ -1,4 +1,4 @@
-import operators/...;
+import return/operators/...;
 
 func as_int(s: string): int = __builtin_ptr_to_int(s);
 

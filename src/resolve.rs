@@ -1,19 +1,19 @@
+use crate::{
+    control::{self, Query},
+    data::{files::Files, quir, Quir},
+    message,
+    misc::Ivec,
+    Provenance,
+};
 use either::Either::{Left, Right};
 use std::collections::HashMap;
-use crate::{
-    control::{self, Query}, data::{files::Files, quir, Quir}, message, misc::Ivec, Provenance
-};
 
 pub struct Data;
 pub type Map = control::Qmap<quir::TypedeclId, (), Data>;
 impl Query<quir::TypedeclId, ()> for Data {
-    type Inputs<'a> = (&'a Files, &'a Quir,);
+    type Inputs<'a> = (&'a Files, &'a Quir);
 
-    fn query(
-        map: &mut Map,
-        &module: &quir::TypedeclId,
-        (files, quir,): Self::Inputs<'_>
-    ) {
+    fn query(map: &mut Map, &module: &quir::TypedeclId, (files, quir): Self::Inputs<'_>) {
         let mut ctx = Ctx::default();
         assert!(
             !quir.items[module].inherits,
@@ -85,14 +85,14 @@ fn resolve_import(
     let no_decl = |loc, head: quir::Id| -> ! {
         files.report(
             message!(error @? loc => "Cannot import from a {}!", head.kind()),
-            &[]
+            &[],
         );
         todo!("exits");
     };
     if import.path.len() < 2 {
         files.report(
             message!(note @ import.loc => "Pointless import!"),
-            &[message!(note => "Remove the import!")]
+            &[message!(note => "Remove the import!")],
         );
         return None;
     }
@@ -105,16 +105,17 @@ fn resolve_import(
             no_decl(head_loc, head);
         };
         head_loc = Some(p.loc);
+        if p.name == "return" {
+            head = quir::Id::Typedecl(id.parent(quir));
+            continue;
+        }
         // NOTE: only works as no reexports are yet possible
         head = match id.index(quir, p.name) {
             Some(id) => id,
             None => {
-                files.report(
-                    message!(error @ p.loc => "Could not resolve name!"),
-                    &[]
-                );
+                files.report(message!(error @ p.loc => "Could not resolve name!"), &[]);
                 todo!("exits");
-            },
+            }
         };
     }
     let name = import.path.last().unwrap().name;
@@ -134,13 +135,9 @@ fn resolve_import(
 impl quir::TypedeclId {
     fn resolve(self, map: &mut Map, files: &Files, ctx: &mut Ctx, quir: &Quir) {
         for i in &quir.items[self].imports {
-            let Some(id) = resolve_import(
-                files,
-                quir,
-                i,
-                quir::Id::Typedecl(self),
-                ctx
-            ) else { break };
+            let Some(id) = resolve_import(files, quir, i, quir::Id::Typedecl(self), ctx) else {
+                break;
+            };
             let _ = i.target.set(id);
         }
         for (&name, &id) in &quir.items[self].items {
@@ -157,6 +154,9 @@ impl quir::TypedeclId {
     // TODO: only works as expected because no reexports are yet possible
     pub fn index(self, quir: &Quir, name: &str) -> Option<quir::Id> {
         quir.items[self].items.get(name).copied()
+    }
+    pub fn parent(self, quir: &Quir) -> quir::TypedeclId {
+        quir.items[self].parent
     }
 }
 
@@ -177,7 +177,7 @@ impl quir::Id {
                 } else {
                     map.query(id, (files, quir));
                 }
-            },
+            }
             quir::Id::Typecase(id) => id.resolve(files, ctx, quir),
             quir::Id::Function(id) => id.resolve(files, ctx, quir),
         }
@@ -196,12 +196,8 @@ impl quir::FunctionId {
         let func = &quir.items[self];
         func.ret.resolve(files, ctx, quir);
         func.binding.resolve(files, ctx, quir);
-        func.body.resolve(
-            files,
-            &mut ctx.sub(None),
-            quir,
-            &func.locals,
-        );
+        func.body
+            .resolve(files, &mut ctx.sub(None), quir, &func.locals);
     }
 }
 
@@ -211,7 +207,7 @@ impl quir::binding::Id {
         files: &Files,
         ctx: &Ctx,
         quir: &Quir,
-        binds: &Ivec<quir::binding::Id, quir::Binding>
+        binds: &Ivec<quir::binding::Id, quir::Binding>,
     ) {
         let b = &binds[self];
         b.typ.resolve(files, ctx, quir);
@@ -223,7 +219,7 @@ impl quir::binding::Id {
         files: &Files,
         ctx: &mut Ctx,
         quir: &Quir,
-        binds: &Ivec<quir::binding::Id, quir::Binding>
+        binds: &Ivec<quir::binding::Id, quir::Binding>,
     ) {
         let b = &binds[self];
         b.kind.register(files, ctx, quir, binds, self);
@@ -236,16 +232,18 @@ impl quir::binding::Empty {
         _: &Files,
         _: &Ctx,
         _: &Quir,
-        _: &Ivec<quir::binding::Id, quir::Binding>
-    ) {}
+        _: &Ivec<quir::binding::Id, quir::Binding>,
+    ) {
+    }
     pub fn register(
         &self,
         _: &Files,
         _: &mut Ctx,
         _: &Quir,
         _: &Ivec<quir::binding::Id, quir::Binding>,
-        _: quir::binding::Id
-    ) {}
+        _: quir::binding::Id,
+    ) {
+    }
 }
 
 impl quir::binding::Name {
@@ -255,7 +253,8 @@ impl quir::binding::Name {
         _: &Ctx,
         _: &Quir,
         _: &Ivec<quir::binding::Id, quir::Binding>,
-    ) {}
+    ) {
+    }
 
     pub fn register(
         &self,
@@ -263,9 +262,10 @@ impl quir::binding::Name {
         ctx: &mut Ctx,
         _: &Quir,
         _: &Ivec<quir::binding::Id, quir::Binding>,
-        id: quir::binding::Id
+        id: quir::binding::Id,
     ) {
-        ctx.names.insert(self.0, AnyId::Local(quir::LocalId::Binding(id)));
+        ctx.names
+            .insert(self.0, AnyId::Local(quir::LocalId::Binding(id)));
     }
 }
 
@@ -275,7 +275,7 @@ impl quir::binding::Tuple {
         files: &Files,
         ctx: &Ctx,
         quir: &Quir,
-        binds: &Ivec<quir::binding::Id, quir::Binding>
+        binds: &Ivec<quir::binding::Id, quir::Binding>,
     ) {
         for &f in &self.0 {
             f.resolve(files, ctx, quir, binds);
@@ -288,7 +288,7 @@ impl quir::binding::Tuple {
         ctx: &mut Ctx,
         quir: &Quir,
         binds: &Ivec<quir::binding::Id, quir::Binding>,
-        _: quir::binding::Id
+        _: quir::binding::Id,
     ) {
         for &id in &self.0 {
             id.register(files, ctx, quir, binds);
@@ -302,9 +302,11 @@ impl quir::binding::Constructor {
         files: &Files,
         ctx: &Ctx,
         quir: &Quir,
-        binds: &Ivec<quir::binding::Id, quir::Binding>
+        binds: &Ivec<quir::binding::Id, quir::Binding>,
     ) {
-        if self.id.get().is_some() { return }
+        if self.id.get().is_some() {
+            return;
+        }
         self.fields.resolve(files, ctx, quir, binds);
         let mut head = match ctx.get(self.constructor[0].name) {
             Some(id) => id,
@@ -314,7 +316,7 @@ impl quir::binding::Constructor {
                         error @ self.constructor[0].loc
                             => "Could not resolve name!"
                     ),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
             }
@@ -323,17 +325,14 @@ impl quir::binding::Constructor {
             let AnyId::Global(quir::Id::Typedecl(id)) = head else {
                 files.report(
                     message!(error @ n.loc => "Cannot import from a {}!", head.kind()),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
             };
             head = match id.index(quir, n.name) {
                 Some(id) => AnyId::Global(id),
                 None => {
-                    files.report(
-                        message!(error @ n.loc => "Could not resolve name!"),
-                        &[]
-                    );
+                    files.report(message!(error @ n.loc => "Could not resolve name!"), &[]);
                     todo!("exits");
                 }
             };
@@ -345,7 +344,7 @@ impl quir::binding::Constructor {
                         => "Expected a constructor, but got {}",
                             head.kind()
                 ),
-                &[]
+                &[],
             );
             todo!("exits");
         };
@@ -358,20 +357,14 @@ impl quir::binding::Constructor {
         ctx: &mut Ctx,
         quir: &Quir,
         binds: &Ivec<quir::binding::Id, quir::Binding>,
-        _: quir::binding::Id
+        _: quir::binding::Id,
     ) {
         self.fields.resolve(files, ctx, quir, binds)
     }
 }
 
 impl quir::expr::Id {
-    fn resolve(
-        self,
-        files: &Files,
-        ctx: &mut Ctx,
-        quir: &Quir,
-        locals: &quir::Locals,
-    ) {
+    fn resolve(self, files: &Files, ctx: &mut Ctx, quir: &Quir, locals: &quir::Locals) {
         let e = &locals.expr[self];
         e.kind.resolve(files, ctx, quir, locals, e.loc, self);
     }
@@ -417,7 +410,8 @@ impl quir::expr::Builtinkind {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::Tuple {
@@ -462,7 +456,8 @@ impl quir::expr::Number {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::String {
@@ -474,7 +469,8 @@ impl quir::expr::String {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::Bool {
@@ -486,7 +482,8 @@ impl quir::expr::Bool {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::Arguments {
@@ -498,7 +495,8 @@ impl quir::expr::Arguments {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::Poison {
@@ -510,7 +508,8 @@ impl quir::expr::Poison {
         _: &quir::Locals,
         _: Provenance,
         _: quir::expr::Id,
-    ) {}
+    ) {
+    }
 }
 
 impl quir::expr::Let {
@@ -582,12 +581,7 @@ impl quir::expr::Loop {
         _: Provenance,
         id: quir::expr::Id,
     ) {
-        self.0.resolve(
-            files,
-            &mut ctx.sub(Some(id)),
-            quir,
-            locals,
-        );
+        self.0.resolve(files, &mut ctx.sub(Some(id)), quir, locals);
     }
 }
 
@@ -601,7 +595,9 @@ impl quir::expr::Break {
         loc: Provenance,
         _: quir::expr::Id,
     ) {
-        if self.target.get().is_some() { return }
+        if self.target.get().is_some() {
+            return;
+        }
         let target = match ctx.break_target() {
             Ok(id) => id,
             Err(()) => {
@@ -610,7 +606,7 @@ impl quir::expr::Break {
                         error @ loc
                             => "Break not contained by any loops"
                     ),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
             }
@@ -629,7 +625,9 @@ impl quir::expr::Recall {
         loc: Provenance,
         _: quir::expr::Id,
     ) {
-        if self.1.get().is_some() { return }
+        if self.1.get().is_some() {
+            return;
+        }
         let mut head = match ctx.get(self.0[0].name) {
             Some(id) => id,
             None => {
@@ -638,26 +636,23 @@ impl quir::expr::Recall {
                         error @ self.0[0].loc
                             => "Could not resolve name!"
                     ),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
-            },
+            }
         };
         for n in &self.0[1..] {
             let AnyId::Global(quir::Id::Typedecl(id)) = head else {
                 files.report(
                     message!(error @ n.loc => "Cannot index a {}!", head.kind()),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
             };
             head = match id.index(quir, n.name) {
                 Some(id) => AnyId::Global(id),
                 None => {
-                    files.report(
-                        message!(error @ n.loc => "Could not resolve name!"),
-                        &[]
-                    );
+                    files.report(message!(error @ n.loc => "Could not resolve name!"), &[]);
                     todo!("exits");
                 }
             };
@@ -671,10 +666,10 @@ impl quir::expr::Recall {
                             => "Expected a term, but got {}",
                                 head.kind()
                     ),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
-            },
+            }
             AnyId::Global(id) => Right(id),
         };
         let _ = self.1.set(id);
@@ -731,7 +726,9 @@ impl quir::types::Tup {
 
 impl quir::types::Recall {
     pub fn resolve(&self, files: &Files, ctx: &Ctx, quir: &Quir, loc: Provenance) {
-        if self.2.get().is_some() { return }
+        if self.2.get().is_some() {
+            return;
+        }
         let mut head = match ctx.get(self.0[0].name) {
             Some(id) => id,
             None => {
@@ -741,26 +738,23 @@ impl quir::types::Recall {
                         error @ self.0[0].loc
                             => "Could not resolve name!"
                     ),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
-            },
+            }
         };
         for n in &self.0[1..] {
             let AnyId::Global(quir::Id::Typedecl(id)) = head else {
                 files.report(
                     message!(error @ n.loc => "Cannot import from a {}!", head.kind()),
-                    &[]
+                    &[],
                 );
                 todo!("exits");
             };
             head = match id.index(quir, n.name) {
                 Some(id) => AnyId::Global(id),
                 None => {
-                    files.report(
-                        message!(error @ n.loc => "Could not resolve name!"),
-                        &[]
-                    );
+                    files.report(message!(error @ n.loc => "Could not resolve name!"), &[]);
                     todo!("exits");
                 }
             };
@@ -772,7 +766,7 @@ impl quir::types::Recall {
                         => "Expected a type, but got {}",
                             head.kind()
                 ),
-                &[]
+                &[],
             );
             todo!("exits");
         };

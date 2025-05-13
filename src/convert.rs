@@ -15,12 +15,12 @@ use crate::{
 pub type Map = control::Qmap<files::Id, quir::TypedeclId, Quir>;
 pub type Data = Quir;
 impl Query<files::Id, quir::TypedeclId> for Quir {
-    type Inputs<'a> = (&'a Files, &'a mut parse::Map, &'a mut Quir);
+    type Inputs<'a> = (&'a Files, &'a mut parse::Map, &'a mut Quir, TypedeclId);
 
     fn query(
         map: &mut control::Qmap<files::Id, quir::TypedeclId, Self>,
         &file: &files::Id,
-        (files, parsemap, quir): Self::Inputs<'_>,
+        (files, parsemap, quir, parent): Self::Inputs<'_>,
     ) -> quir::TypedeclId {
         let ast = parsemap.query(file, (files,));
         let name = files[file]
@@ -40,16 +40,17 @@ impl Query<files::Id, quir::TypedeclId> for Quir {
                 loc: Provenance::None,
                 name,
             },
+            parent,
         });
         let mut items = BTreeMap::new();
         for &c in &files[file].children {
-            let child = map.query(c, (files, parsemap, quir));
+            let child = map.query(c, (files, parsemap, quir, id));
             let name = quir.items.typedecls[child].name.name;
             items.insert(name, Id::Typedecl(child));
         }
         for t in ast.types.iter() {
             let name = t.name.name;
-            let t = t.convert(file, quir);
+            let t = t.convert(id, file, quir);
             items.insert(name, Id::Typedecl(t));
         }
         for f in ast.funcs.iter() {
@@ -73,7 +74,7 @@ impl ast::Import {
 }
 
 impl ast::Typedecl {
-    fn convert(&self, file: files::Id, data: &mut Quir) -> TypedeclId {
+    fn convert(&self, parent: TypedeclId, file: files::Id, data: &mut Quir) -> TypedeclId {
         let &ast::Typedecl {
             loc,
             name,
@@ -84,6 +85,7 @@ impl ast::Typedecl {
             imports: Vec::new(),
             cases: Vec::new(),
             inherits: true,
+            parent,
             loc,
             name,
         });

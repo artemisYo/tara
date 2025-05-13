@@ -50,10 +50,9 @@ pub mod files {
 }
 
 pub mod ast {
-    use std::num::NonZero;
-    use crate::Provenance;
     use super::Ident;
-
+    use crate::Provenance;
+    use std::num::NonZero;
 
     #[derive(Debug, Clone, Copy)]
     pub struct Op {
@@ -117,8 +116,12 @@ pub mod ast {
         pub kind: binding::Kind,
     }
     pub mod binding {
-        use crate::{data::{files, quir, Ident, Quir}, misc::Ivec, CommonEnum, Provenance};
         use super::{Binding, Type};
+        use crate::{
+            data::{files, quir, Ident, Quir},
+            misc::Ivec,
+            CommonEnum, Provenance,
+        };
 
         CommonEnum! {
             #[derive(Debug)]
@@ -159,7 +162,10 @@ pub mod ast {
         pub kind: expr::Kind,
     }
     pub mod expr {
-        use crate::{data::{files, quir, Ident, Quir}, CommonEnum, Provenance};
+        use crate::{
+            data::{files, quir, Ident, Quir},
+            CommonEnum, Provenance,
+        };
 
         use super::{Binding, Expr};
 
@@ -250,6 +256,11 @@ pub mod quir {
     MkIndexer!(pub TypecaseId, u32);
     MkIndexer!(pub TypedeclId, u32);
     MkIndexer!(pub FunctionId, u32);
+    impl super::Quir {
+        pub fn root(&self) -> TypedeclId {
+            TypedeclId(0)
+        }
+    }
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Id {
         Typecase(TypecaseId),
@@ -263,7 +274,6 @@ pub mod quir {
         pub typecases: Ivec<TypecaseId, Typecase>,
     }
 
-   
     #[derive(Debug, Clone)]
     pub struct Import {
         pub loc: Provenance,
@@ -279,6 +289,7 @@ pub mod quir {
         pub cases: Vec<TypecaseId>,
         pub items: BTreeMap<&'static str, Id>,
         pub inherits: bool,
+        pub parent: TypedeclId,
     }
     #[derive(Debug)]
     pub struct Typecase {
@@ -323,7 +334,12 @@ pub mod quir {
         use std::cell::OnceCell;
 
         use super::{Binding, FunctionId, Items, TypecaseId, Types};
-        use crate::{codegen, data::{files::Files, Ident, Quir}, misc::Ivec, resolve, typer, CommonEnum, MkIndexer, Provenance};
+        use crate::{
+            codegen,
+            data::{files::Files, Ident, Quir},
+            misc::Ivec,
+            resolve, typer, CommonEnum, MkIndexer, Provenance,
+        };
         MkIndexer!(pub Id, u32);
 
         CommonEnum! {
@@ -388,9 +404,13 @@ pub mod quir {
     pub mod expr {
         use std::cell::OnceCell;
 
-        use either::Either;
-        use crate::{codegen, data::{files::Files, Ident, Quir}, resolve, typer, CommonEnum, MkIndexer, Provenance};
         use super::{binding, FunctionId, Items, Locals, Type, Types};
+        use crate::{
+            codegen,
+            data::{files::Files, Ident, Quir},
+            resolve, typer, CommonEnum, MkIndexer, Provenance,
+        };
+        use either::Either;
 
         MkIndexer!(pub Id, u32);
         CommonEnum! {
@@ -560,8 +580,14 @@ pub mod quir {
     pub mod types {
         use std::cell::OnceCell;
 
-        use crate::{data::{files::{self, Files}, Ident, Quir}, resolve, CommonEnum, MkIndexer, Provenance};
         use super::TypedeclId;
+        use crate::{
+            data::{
+                files::{self, Files},
+                Ident, Quir,
+            },
+            resolve, CommonEnum, MkIndexer, Provenance,
+        };
         MkIndexer!(pub Id, u32);
 
         CommonEnum! {
@@ -642,7 +668,7 @@ pub mod quir {
             TypeFmt {
                 root: self.kind,
                 loc: Some(self.loc),
-                types
+                types,
             }
         }
     }
@@ -667,10 +693,12 @@ pub mod quir {
                 write!(f, "(@{:?}) ", loc)?;
             }
             match &self.types[self.root] {
-                Func(types::Func { args, ret }) =>
-                    write!(f, "func({}): {}", self.sub(*args), self.sub(*ret)),
-                Call(types::Call { args, func }) =>
-                    write!(f, "{}{}", self.sub(*func), self.sub(*args)),
+                Func(types::Func { args, ret }) => {
+                    write!(f, "func({}): {}", self.sub(*args), self.sub(*ret))
+                }
+                Call(types::Call { args, func }) => {
+                    write!(f, "{}{}", self.sub(*func), self.sub(*args))
+                }
                 Bundle(types::Bundle(ref ids)) => {
                     write!(f, "(")?;
                     if !ids.is_empty() {
@@ -680,7 +708,7 @@ pub mod quir {
                         }
                     }
                     write!(f, ")")
-                },
+                }
                 Recall(types::Recall(path, _, _)) => {
                     write!(f, "{}", path[0].name)?;
                     for &n in &path[1..] {
@@ -714,19 +742,22 @@ impl Codegen {
             disassembler: false,
             info: false,
             machine_code: true,
-        }).unwrap();
+        })
+        .unwrap();
         let triple = TargetMachine::get_default_triple();
         let target = targets::Target::from_triple(&triple).unwrap();
         let cpu = TargetMachine::get_host_cpu_name();
         let features = TargetMachine::get_host_cpu_features();
-        let target = target.create_target_machine(
-            &triple,
-            cpu.to_str().unwrap(),
-            features.to_str().unwrap(),
-            inkwell::OptimizationLevel::None,
-            targets::RelocMode::Default,
-            targets::CodeModel::Default,
-        ).unwrap();
+        let target = target
+            .create_target_machine(
+                &triple,
+                cpu.to_str().unwrap(),
+                features.to_str().unwrap(),
+                inkwell::OptimizationLevel::None,
+                targets::RelocMode::Default,
+                targets::CodeModel::Default,
+            )
+            .unwrap();
         Self { module, target }
     }
 }
