@@ -1,8 +1,22 @@
-use std::{collections::HashMap, rc::Rc};
+use crate::{
+    control::{Qmap, Query},
+    data::{
+        files::Files,
+        quir::{self, binding, expr, types},
+        Codegen, Quir,
+    },
+    fill, resolve, typer,
+};
 use either::Either::{Left, Right};
-use inkwell::{basic_block::BasicBlock, builder::Builder, context::ContextRef, types::{AnyTypeEnum, BasicType, BasicTypeEnum, StringRadix, StructType}, values::{AggregateValueEnum, AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue}, AddressSpace, InlineAsmDialect, IntPredicate};
-use crate::{control::{Qmap, Query}, data::{files::Files, quir::{self, binding, expr, types}, Codegen, Quir}, fill, resolve, typer};
-
+use inkwell::{
+    basic_block::BasicBlock,
+    builder::Builder,
+    context::ContextRef,
+    types::{AnyTypeEnum, BasicType, BasicTypeEnum, StringRadix, StructType},
+    values::{AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
+    AddressSpace, InlineAsmDialect, IntPredicate,
+};
+use std::{collections::HashMap, rc::Rc};
 
 #[derive(Clone, Debug)]
 pub enum Data {
@@ -43,20 +57,14 @@ impl Query<quir::Id, Data> for Data {
             tymap,
             resmap,
             fillmap,
-            cg
-        ): Self::Inputs<'_>
+            cg,
+        ): Self::Inputs<'_>,
     ) -> Data {
         fillmap.query(id, (files, tymap, &quir.items, &mut quir.types, resmap));
         match id {
-            quir::Id::Typecase(id) => Data::Func(
-                maptc.query(id, (cg, quir, mapty, maptd))
-            ),
-            quir::Id::Typedecl(id) => Data::Typedecl(
-                maptd.query(id, (cg, quir, mapty))
-            ),
-            quir::Id::Function(id) => Data::Func(
-                mapfn.query(id, (cg, quir, maptd, maptc, mapty))
-            ),
+            quir::Id::Typecase(id) => Data::Func(maptc.query(id, (cg, quir, mapty, maptd))),
+            quir::Id::Typedecl(id) => Data::Typedecl(maptd.query(id, (cg, quir, mapty))),
+            quir::Id::Function(id) => Data::Func(mapfn.query(id, (cg, quir, maptd, maptc, mapty))),
         }
     }
 }
@@ -65,16 +73,12 @@ impl Query<quir::Id, Data> for Data {
 pub struct Typedecl(StructType<'static>, Rc<[StructType<'static>]>);
 type Maptd = Qmap<quir::TypedeclId, Typedecl, ()>;
 impl Query<quir::TypedeclId, Typedecl> for () {
-    type Inputs<'a> = (
-        &'a mut Codegen,
-        &'a Quir,
-        &'a mut Mapty,
-    );
+    type Inputs<'a> = (&'a mut Codegen, &'a Quir, &'a mut Mapty);
 
     fn query(
         map: &mut Maptd,
         &id: &quir::TypedeclId,
-        (cg, quir, cgtymap): Self::Inputs<'_>
+        (cg, quir, cgtymap): Self::Inputs<'_>,
     ) -> Typedecl {
         let lcx = cg.module.get_context();
         let cases = &quir.items.typedecls[id].cases;
@@ -103,7 +107,7 @@ impl Query<quir::TypedeclId, Typedecl> for () {
                 lcx.custom_width_int_type(tail_size as u32 * 8).into(),
                 tag_type.into(),
             ],
-            false
+            false,
         );
         let tail_type: Vec<_> = cases_tails
             .into_iter()
@@ -126,17 +130,12 @@ impl Query<quir::TypedeclId, Typedecl> for () {
 
 type Maptc = Qmap<quir::TypecaseId, FunctionValue<'static>, ()>;
 impl Query<quir::TypecaseId, FunctionValue<'static>> for () {
-    type Inputs<'a> = (
-        &'a mut Codegen,
-        &'a Quir,
-        &'a mut Mapty,
-        &'a mut Maptd,
-    );
+    type Inputs<'a> = (&'a mut Codegen, &'a Quir, &'a mut Mapty, &'a mut Maptd);
 
     fn query(
         _: &mut Maptc,
         &id: &quir::TypecaseId,
-        (cg, quir, mapty, maptd): Self::Inputs<'_>
+        (cg, quir, mapty, maptd): Self::Inputs<'_>,
     ) -> FunctionValue<'static> {
         let quir::Typecase {
             binding,
@@ -185,16 +184,12 @@ impl Query<quir::TypecaseId, FunctionValue<'static>> for () {
 
 type Mapty = Qmap<(types::Id, Option<types::Id>), AnyTypeEnum<'static>, ()>;
 impl Query<(types::Id, Option<types::Id>), AnyTypeEnum<'static>> for () {
-    type Inputs<'a> = (
-        &'a mut Codegen,
-        &'a Quir,
-        &'a mut Maptd,
-    );
+    type Inputs<'a> = (&'a mut Codegen, &'a Quir, &'a mut Maptd);
 
     fn query(
         map: &mut Mapty,
         &(id, args): &(types::Id, Option<types::Id>),
-        (cg, quir, maptd): Self::Inputs<'_>
+        (cg, quir, maptd): Self::Inputs<'_>,
     ) -> AnyTypeEnum<'static> {
         use quir::types::Kind::*;
         let lcx = cg.module.get_context();
@@ -204,18 +199,20 @@ impl Query<(types::Id, Option<types::Id>), AnyTypeEnum<'static>> for () {
             Recall(types::Recall(_, _, ref id)) => {
                 let &id = id.get().unwrap();
                 maptd.query(id, (cg, quir, map)).0.into()
-            },
+            }
             Func(types::Func { args, ret }) => {
                 let args = map.query((args, None), (cg, quir, maptd));
                 let args = cg.anytype_to_basic(args);
                 let ret = map.query((ret, None), (cg, quir, maptd));
                 let ret = cg.anytype_to_basic(ret);
                 ret.fn_type(&[args.into()], false).into()
-            },
+            }
             Call(types::Call { args, func }) => map.query((func, Some(args)), (cg, quir, maptd)),
             Tup(_) => {
                 let args = args.unwrap();
-                let Bundle(types::Bundle(ref args)) = quir.types.types[args] else { panic!() };
+                let Bundle(types::Bundle(ref args)) = quir.types.types[args] else {
+                    panic!()
+                };
                 let mut fields = Vec::with_capacity(args.len());
                 for &a in args {
                     let a = map.query((a, None), (cg, quir, maptd));
@@ -223,7 +220,7 @@ impl Query<(types::Id, Option<types::Id>), AnyTypeEnum<'static>> for () {
                     fields.push(a);
                 }
                 lcx.struct_type(fields.as_slice(), false).into()
-            },
+            }
             String(_) => lcx.ptr_type(AddressSpace::default()).into(),
             Bool(_) => lcx.custom_width_int_type(1).into(),
             Int(_) => lcx.i64_type().into(),
@@ -236,7 +233,8 @@ impl Codegen {
         match t {
             AnyTypeEnum::ArrayType(t) => t.into(),
             AnyTypeEnum::FloatType(t) => t.into(),
-            AnyTypeEnum::FunctionType(_) => self.module
+            AnyTypeEnum::FunctionType(_) => self
+                .module
                 .get_context()
                 .ptr_type(AddressSpace::default())
                 .into(),
@@ -276,7 +274,7 @@ impl Query<quir::FunctionId, FunctionValue<'static>> for () {
     fn query(
         mapfn: &mut Mapfn,
         &id: &quir::FunctionId,
-        (cg, quir, maptd, maptc, mapty): Self::Inputs<'_>
+        (cg, quir, maptd, maptc, mapty): Self::Inputs<'_>,
     ) -> FunctionValue<'static> {
         let mut mapxp = Mapxp::default();
         let mut mapbd = Mapbd::default();
@@ -289,11 +287,7 @@ impl Query<quir::FunctionId, FunctionValue<'static>> for () {
         let ret = cg.anytype_to_basic(ret);
         let ty = ret.fn_type(&[binding.into()], false);
         let lcx = cg.module.get_context();
-        let val = cg.module.add_function(
-            quir.items[id].name.name,
-            ty,
-            None
-        );
+        let val = cg.module.add_function(quir.items[id].name.name, ty, None);
         let entry = lcx.append_basic_block(val, "entry");
         let ret_b = lcx.append_basic_block(val, "entry");
         let builder = lcx.create_builder();
@@ -310,25 +304,29 @@ impl Query<quir::FunctionId, FunctionValue<'static>> for () {
             ret_b,
             val,
             lcx,
-            id
+            id,
         };
         let body = quir.items[id].body;
-        match mapxp.query(body, (&mut ctx, cg, quir, mapty, maptd, maptc, mapfn, &mut mapbd)) {
-            Err(Control::Return) => {},
+        match mapxp.query(
+            body,
+            (&mut ctx, cg, quir, mapty, maptd, maptc, mapfn, &mut mapbd),
+        ) {
+            Err(Control::Return) => {}
             Err(Control::Break) => panic!(),
-            Ok(LocalValue::Value(body)) => {
+            Ok((LocalValue::Value(body), _)) => {
                 let body = cg.anyval_to_basic(body);
                 ctx.builder.build_store(ctx.ret_v, body).unwrap();
                 ctx.builder.build_unconditional_branch(ctx.ret_b).unwrap();
             }
-            Ok(LocalValue::Place(ty, body)) => {
+            Ok((LocalValue::Place(ty, body), _)) => {
                 let body = ctx.builder.build_load(ty, body, "deref_local").unwrap();
                 ctx.builder.build_store(ctx.ret_v, body).unwrap();
                 ctx.builder.build_unconditional_branch(ctx.ret_b).unwrap();
             }
         }
         ctx.builder.position_at_end(ctx.ret_b);
-        let ret_v = ctx.builder
+        let ret_v = ctx
+            .builder
             .build_load(ty.get_return_type().unwrap(), ctx.ret_v, "*return_slot")
             .unwrap();
         ctx.builder.build_return(Some(&ret_v)).unwrap();
@@ -349,7 +347,7 @@ impl Control {
         }
     }
 }
-pub type Result = std::result::Result<LocalValue, Control>;
+pub type Result = std::result::Result<(LocalValue, BasicBlock<'static>), Control>;
 
 pub struct Ctx {
     builder: Builder<'static>,
@@ -390,11 +388,7 @@ impl Query<expr::Id, Result> for expr::Id {
         &'a mut Mapbd,
     );
 
-    fn query(
-        map: &mut Mapxp,
-        &id: &expr::Id,
-        inputs: Self::Inputs<'_>
-    ) -> Result {
+    fn query(map: &mut Mapxp, &id: &expr::Id, inputs: Self::Inputs<'_>) -> Result {
         let this = &inputs.2.items[(inputs.0.id, id)];
         this.kind.codegen(map, this.typ, inputs)
     }
@@ -412,32 +406,46 @@ impl expr::If {
         let post_b = ctx.lcx.append_basic_block(ctx.val, "smash");
         ctx.ifs.push(pass_b);
         let AnyValueEnum::IntValue(cond) = mapxp
-            .query(self.cond, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .query(
+                self.cond,
+                (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+            )?
+            .0
             .value(ctx)
-        else { panic!() };
-        ctx.builder.build_conditional_branch(cond, smash_b, pass_b).unwrap();
+        else {
+            panic!()
+        };
+        ctx.builder
+            .build_conditional_branch(cond, smash_b, pass_b)
+            .unwrap();
         let mut cont = false;
         ctx.builder.position_at_end(smash_b);
-        let smash_v = mapxp.query(self.smash, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd));
+        let smash_v = mapxp.query(
+            self.smash,
+            (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+        );
         let smash_v = match smash_v {
-            Ok(smash_v) => {
-                let v = Ok(smash_v.value(ctx));
+            Ok((smash_v, b)) => {
+                let v = Ok((smash_v.value(ctx), b));
                 ctx.builder.build_unconditional_branch(post_b).unwrap();
                 cont = true;
                 v
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         };
         ctx.builder.position_at_end(pass_b);
-        let pass_v = mapxp.query(self.pass, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd));
+        let pass_v = mapxp.query(
+            self.pass,
+            (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+        );
         let pass_v = match pass_v {
-            Ok(pass_v) => {
-                let v = Ok(pass_v.value(ctx));
+            Ok((pass_v, b)) => {
+                let v = Ok((pass_v.value(ctx), b));
                 ctx.builder.build_unconditional_branch(post_b).unwrap();
                 cont = true;
                 v
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         };
 
         ctx.builder.position_at_end(post_b);
@@ -447,20 +455,16 @@ impl expr::If {
         }
 
         let (l, p, q) = match (smash_v, pass_v) {
-            (Ok(p), Ok(q)) => (
-                2,
-                (cg.anyval_to_basic(p), smash_b),
-                (cg.anyval_to_basic(q), pass_b),
-            ),
-            (Ok(p), _) => (
+            (Ok((p, b)), Ok((q, d))) => (2, (cg.anyval_to_basic(p), b), (cg.anyval_to_basic(q), d)),
+            (Ok((p, b)), _) => (
                 1,
-                (cg.anyval_to_basic(p), smash_b),
-                (ctx.lcx.const_struct(&[], false).into(), pass_b)
+                (cg.anyval_to_basic(p), b),
+                (ctx.lcx.const_struct(&[], false).into(), pass_b),
             ),
-            (_, Ok(q)) => (
+            (_, Ok((q, d))) => (
                 1,
-                (cg.anyval_to_basic(q), pass_b),
-                (ctx.lcx.const_struct(&[], false).into(), smash_b)
+                (cg.anyval_to_basic(q), d),
+                (ctx.lcx.const_struct(&[], false).into(), smash_b),
             ),
             _ => unreachable!(),
         };
@@ -476,7 +480,7 @@ impl expr::If {
             .unwrap();
         phi_v.add_incoming(incoming);
         phi_v.as_basic_value();
-        Ok(LocalValue::Value(phi_v.into()))
+        Ok((LocalValue::Value(phi_v.into()), post_b))
     }
 }
 
@@ -488,18 +492,38 @@ impl expr::Call {
         (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
         if let expr::Kind::Builtin(b) = quir.items[(ctx.id, self.func)].kind {
-            b.codegen_real(mapxp, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd), self.args)
+            b.codegen_real(
+                mapxp,
+                (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+                self.args,
+            )
         } else {
-            let func_v = match mapxp.query(self.func, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx) {
+            let func_v = match mapxp
+                .query(
+                    self.func,
+                    (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+                )?
+                .0
+                .value(ctx)
+            {
                 AnyValueEnum::FunctionValue(v) => v,
                 _ => panic!(),
             };
-            let args = mapxp.query(self.args, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+            let args = mapxp
+                .query(
+                    self.args,
+                    (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd),
+                )?
+                .0
+                .value(ctx);
             let res = ctx
                 .builder
                 .build_call(func_v, &[cg.anyval_to_basic(args).into()], "call")
                 .unwrap();
-            Ok(LocalValue::Value(res.as_any_value_enum()))
+            Ok((
+                LocalValue::Value(res.as_any_value_enum()),
+                ctx.builder.get_insert_block().unwrap(),
+            ))
         }
     }
 }
@@ -512,73 +536,190 @@ impl expr::Builtinkind {
         &self,
         mapxp: &mut Mapxp,
         (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
-        args_id: expr::Id
+        args_id: expr::Id,
     ) -> Result {
         let mut args = Vec::with_capacity(7);
         match quir.items[(ctx.id, args_id)].kind {
             expr::Kind::Tuple(ref t) => {
                 for &f in &t.0 {
-                    let f = mapxp.query(f, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+                    let f = mapxp
+                        .query(f, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+                        .0
+                        .value(ctx);
                     args.push(f);
                 }
             }
             _ => {
-                let a = mapxp.query(args_id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+                let a = mapxp
+                    .query(args_id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+                    .0
+                    .value(ctx);
                 args.push(a);
             }
         }
         let name = self.spelling();
         let bl = &mut ctx.builder;
         use expr::Builtinkind::*;
-        Ok(LocalValue::Value(match self {
-            Add => bl.build_int_add(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Sub => bl.build_int_sub(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Mul => bl.build_int_mul(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Div => bl.build_int_unsigned_div(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Mod => bl.build_int_unsigned_rem(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            And => bl.build_and(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Or => bl.build_or(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            Xor => bl.build_xor(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            ShLeft => bl.build_left_shift(args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            ShRight => bl.build_right_shift(args[0].into_int_value(), args[1].into_int_value(), false, name).unwrap().into(),
-            Not => bl.build_not(args[0].into_int_value(), name).unwrap().into(),
-            Negate => bl.build_int_neg(args[0].into_int_value(), name).unwrap().into(),
-            CmpEq => bl.build_int_compare(IntPredicate::EQ, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            CmpNE => bl.build_int_compare(IntPredicate::NE, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            CmpGt => bl.build_int_compare(IntPredicate::UGT, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            CmpLt => bl.build_int_compare(IntPredicate::ULT, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            CmpGE => bl.build_int_compare(IntPredicate::UGE, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            CmpLE => bl.build_int_compare(IntPredicate::ULE, args[0].into_int_value(), args[1].into_int_value(), name).unwrap().into(),
-            PtrToInt => bl.build_ptr_to_int(args[0].into_pointer_value(), ctx.lcx.i64_type(), name).unwrap().into(),
-            IntToPtr => bl.build_int_to_ptr(args[0].into_int_value(), ctx.lcx.ptr_type(AddressSpace::default()), name).unwrap().into(),
-            Syscall => {
-                let asm_t = ctx.lcx.i64_type().fn_type(&[ctx.lcx.i64_type().into(); 7], false);
-                let asm_v = ctx.lcx.create_inline_asm(
-                    asm_t,
-                    "syscall".into(),
-                    "=r,{rax},{rdi},{rsi},{rdx},{r8},{r9},{r10}".into(),
-                    true,
-                    false,
-                    Some(InlineAsmDialect::Intel),
-                    false
-                );
-                bl.build_indirect_call(
-                    asm_t,
-                    asm_v,
-                    &[
-                        args[0].into_int_value().into(),
-                        args[1].into_int_value().into(),
-                        args[2].into_int_value().into(),
-                        args[3].into_int_value().into(),
-                        args[4].into_int_value().into(),
-                        args[5].into_int_value().into(),
-                        args[6].into_int_value().into(),
-                    ],
-                    name
-                ).unwrap()
-                .as_any_value_enum()
-            },
-        }))
+        Ok((
+            LocalValue::Value(match self {
+                Add => bl
+                    .build_int_add(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                Sub => bl
+                    .build_int_sub(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                Mul => bl
+                    .build_int_mul(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                Div => bl
+                    .build_int_unsigned_div(
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                Mod => bl
+                    .build_int_unsigned_rem(
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                And => bl
+                    .build_and(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                Or => bl
+                    .build_or(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                Xor => bl
+                    .build_xor(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                ShLeft => bl
+                    .build_left_shift(args[0].into_int_value(), args[1].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                ShRight => bl
+                    .build_right_shift(
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        false,
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                Not => bl.build_not(args[0].into_int_value(), name).unwrap().into(),
+                Negate => bl
+                    .build_int_neg(args[0].into_int_value(), name)
+                    .unwrap()
+                    .into(),
+                CmpEq => bl
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                CmpNE => bl
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                CmpGt => bl
+                    .build_int_compare(
+                        IntPredicate::UGT,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                CmpLt => bl
+                    .build_int_compare(
+                        IntPredicate::ULT,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                CmpGE => bl
+                    .build_int_compare(
+                        IntPredicate::UGE,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                CmpLE => bl
+                    .build_int_compare(
+                        IntPredicate::ULE,
+                        args[0].into_int_value(),
+                        args[1].into_int_value(),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                PtrToInt => bl
+                    .build_ptr_to_int(args[0].into_pointer_value(), ctx.lcx.i64_type(), name)
+                    .unwrap()
+                    .into(),
+                IntToPtr => bl
+                    .build_int_to_ptr(
+                        args[0].into_int_value(),
+                        ctx.lcx.ptr_type(AddressSpace::default()),
+                        name,
+                    )
+                    .unwrap()
+                    .into(),
+                Syscall => {
+                    let asm_t = ctx
+                        .lcx
+                        .i64_type()
+                        .fn_type(&[ctx.lcx.i64_type().into(); 7], false);
+                    let asm_v = ctx.lcx.create_inline_asm(
+                        asm_t,
+                        "syscall".into(),
+                        "=r,{rax},{rdi},{rsi},{rdx},{r8},{r9},{r10}".into(),
+                        true,
+                        false,
+                        Some(InlineAsmDialect::Intel),
+                        false,
+                    );
+                    bl.build_indirect_call(
+                        asm_t,
+                        asm_v,
+                        &[
+                            args[0].into_int_value().into(),
+                            args[1].into_int_value().into(),
+                            args[2].into_int_value().into(),
+                            args[3].into_int_value().into(),
+                            args[4].into_int_value().into(),
+                            args[5].into_int_value().into(),
+                            args[6].into_int_value().into(),
+                        ],
+                        name,
+                    )
+                    .unwrap()
+                    .as_any_value_enum()
+                }
+            }),
+            bl.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -587,7 +728,7 @@ impl expr::Tuple {
         &self,
         mapxp: &mut Mapxp,
         ty: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
         let expr_ids = &self.0;
         let AnyTypeEnum::StructType(ty) = mapty.query((ty.kind, None), (cg, quir, maptd)) else {
@@ -595,11 +736,20 @@ impl expr::Tuple {
         };
         let mut comma = ty.get_undef().into();
         for (ix, &id) in expr_ids.iter().enumerate() {
-            let v = mapxp.query(id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+            let v = mapxp
+                .query(id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+                .0
+                .value(ctx);
             let v = cg.anyval_to_basic(v);
-            comma = ctx.builder.build_insert_value(comma, v, ix as u32, "tuple").unwrap();
+            comma = ctx
+                .builder
+                .build_insert_value(comma, v, ix as u32, "tuple")
+                .unwrap();
         }
-        Ok(LocalValue::Value(comma.as_any_value_enum()))
+        Ok((
+            LocalValue::Value(comma.as_any_value_enum()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -608,7 +758,7 @@ impl expr::Loop {
         &self,
         mapxp: &mut Mapxp,
         ty: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
         let ty = mapty.query((ty.kind, None), (cg, quir, maptd));
         let ty = cg.anytype_to_basic(ty);
@@ -628,7 +778,10 @@ impl expr::Loop {
         ctx.builder.position_at_end(post_b);
         ctx.loops.pop();
         let v = ctx.builder.build_load(ty, post_v, "*loop_slot").unwrap();
-        Ok(LocalValue::Value(v.into()))
+        Ok((
+            LocalValue::Value(v.into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -637,13 +790,15 @@ impl expr::Bareblock {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
         let mut out = LocalValue::Value(ctx.lcx.const_struct(&[], false).into());
         for &id in &self.0 {
-            out = mapxp.query(id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?;
+            out = mapxp
+                .query(id, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+                .0;
         }
-        Ok(out)
+        Ok((out, ctx.builder.get_insert_block().unwrap()))
     }
 }
 
@@ -652,21 +807,30 @@ impl expr::Recall {
         &self,
         _: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, _): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, _): Inputsxp<'_>,
     ) -> Result {
         match self.1.get().unwrap() {
             Left(l) => {
                 let binding::Kind::Name(n) = quir.items[(ctx.id, *l)].kind else {
                     panic!()
                 };
-                Ok(*ctx.lets.get(n.0).unwrap())
-            },
-            Right(quir::Id::Function(g)) => Ok(LocalValue::Value(if g == &ctx.id {
-                ctx.val.into()
-            } else {
-                mapfn.query(*g, (cg, quir, maptd, maptc, mapty)).into()
-            })),
-            Right(quir::Id::Typecase(g)) => Ok(LocalValue::Value(maptc.query(*g, (cg, quir, mapty, maptd)).into())),
+                Ok((
+                    *ctx.lets.get(n.0).unwrap(),
+                    ctx.builder.get_insert_block().unwrap(),
+                ))
+            }
+            Right(quir::Id::Function(g)) => Ok((
+                LocalValue::Value(if g == &ctx.id {
+                    ctx.val.into()
+                } else {
+                    mapfn.query(*g, (cg, quir, maptd, maptc, mapty)).into()
+                }),
+                ctx.builder.get_insert_block().unwrap(),
+            )),
+            Right(quir::Id::Typecase(g)) => Ok((
+                LocalValue::Value(maptc.query(*g, (cg, quir, mapty, maptd)).into()),
+                ctx.builder.get_insert_block().unwrap(),
+            )),
             Right(quir::Id::Typedecl(_)) => panic!(),
         }
     }
@@ -677,14 +841,17 @@ impl expr::Number {
         &self,
         _: &mut Mapxp,
         _: quir::Type,
-        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>
+        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>,
     ) -> Result {
         let v = ctx
             .lcx
             .i64_type()
             .const_int_from_string(self.0, StringRadix::Decimal)
             .unwrap();
-        Ok(LocalValue::Value(v.into()))
+        Ok((
+            LocalValue::Value(v.into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -693,13 +860,16 @@ impl expr::String {
         &self,
         _: &mut Mapxp,
         _: quir::Type,
-        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>
+        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>,
     ) -> Result {
         let global = ctx
             .builder
             .build_global_string_ptr(self.0, "string_literal")
             .unwrap();
-        Ok(LocalValue::Value(global.as_pointer_value().into()))
+        Ok((
+            LocalValue::Value(global.as_pointer_value().into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -708,11 +878,14 @@ impl expr::Bool {
         &self,
         _: &mut Mapxp,
         _: quir::Type,
-        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>
+        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>,
     ) -> Result {
         let v = if self.0 == "true" { 1 } else { 0 };
         let v = ctx.lcx.custom_width_int_type(1).const_int(v, false);
-        Ok(LocalValue::Value(v.into()))
+        Ok((
+            LocalValue::Value(v.into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -721,19 +894,17 @@ impl expr::Arguments {
         &self,
         _: &mut Mapxp,
         _: quir::Type,
-        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>
+        (ctx, _, _, _, _, _, _, _): Inputsxp<'_>,
     ) -> Result {
-        Ok(LocalValue::Value(ctx.val.get_nth_param(0).unwrap().into()))
+        Ok((
+            LocalValue::Value(ctx.val.get_nth_param(0).unwrap().into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
 impl expr::Poison {
-    pub fn codegen(
-        &self,
-        _: &mut Mapxp,
-        _: quir::Type,
-        _: Inputsxp<'_>
-    ) -> Result {
+    pub fn codegen(&self, _: &mut Mapxp, _: quir::Type, _: Inputsxp<'_>) -> Result {
         todo!("poison barring codegen")
     }
 }
@@ -743,9 +914,12 @@ impl expr::Let {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
-        let v = mapxp.query(self.1, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+        let v = mapxp
+            .query(self.1, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .0
+            .value(ctx);
         let v = cg.anyval_to_basic(v);
         mapbd.query(self.0, (ctx, cg, quir, maptd, mapty, v))
     }
@@ -756,16 +930,24 @@ impl expr::Assign {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
-        let val = mapxp.query(self.1, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+        let val = mapxp
+            .query(self.1, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .0
+            .value(ctx);
         let val = cg.anyval_to_basic(val);
-        let place = mapxp.query(self.0, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?;
+        let place = mapxp
+            .query(self.0, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .0;
         let LocalValue::Place(_, ptr) = place else {
             todo!("verifying non-type sema")
         };
         ctx.builder.build_store(ptr, val).unwrap();
-        Ok(LocalValue::Value(ctx.lcx.const_struct(&[], false).into()))
+        Ok((
+            LocalValue::Value(ctx.lcx.const_struct(&[], false).into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -774,9 +956,12 @@ impl expr::Break {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
-        let v = mapxp.query(self.val, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+        let v = mapxp
+            .query(self.val, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .0
+            .value(ctx);
         let (block, ptr) = ctx.loops.last().unwrap();
         ctx.builder
             .build_store(*ptr, cg.anyval_to_basic(v))
@@ -791,9 +976,12 @@ impl expr::Return {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
-        let v = mapxp.query(self.0, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?.value(ctx);
+        let v = mapxp
+            .query(self.0, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?
+            .0
+            .value(ctx);
         ctx.builder
             .build_store(ctx.ret_v, cg.anyval_to_basic(v))
             .unwrap();
@@ -807,10 +995,13 @@ impl expr::Const {
         &self,
         mapxp: &mut Mapxp,
         _: quir::Type,
-        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>
+        (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd): Inputsxp<'_>,
     ) -> Result {
         mapxp.query(self.0, (ctx, cg, quir, mapty, maptd, maptc, mapfn, mapbd))?;
-        Ok(LocalValue::Value(ctx.lcx.const_struct(&[], false).into()))
+        Ok((
+            LocalValue::Value(ctx.lcx.const_struct(&[], false).into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -823,39 +1014,37 @@ impl Query<binding::Id, Result> for binding::Id {
         &'a Quir,
         &'a mut Maptd,
         &'a mut Mapty,
-        BasicValueEnum<'static>
+        BasicValueEnum<'static>,
     );
 
     fn query(
         mapbd: &mut Qmap<binding::Id, Result, Self>,
         &id: &binding::Id,
-        inp: Self::Inputs<'_>
+        inp: Self::Inputs<'_>,
     ) -> Result {
         inp.2.items[(inp.0.id, id)].kind.check(mapbd, inp)
     }
 }
 
 impl binding::Empty {
-    pub fn check(
-        &self,
-        _: &mut Mapbd,
-        (ctx, _, _, _, _, _): Inputsbd<'_>
-    ) -> Result {
-        Ok(LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()))
+    pub fn check(&self, _: &mut Mapbd, (ctx, _, _, _, _, _): Inputsbd<'_>) -> Result {
+        Ok((
+            LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
 impl binding::Name {
-    pub fn check(
-        &self,
-        _: &mut Mapbd,
-        (ctx, _, _, _, _, v): Inputsbd<'_>
-    ) -> Result {
+    pub fn check(&self, _: &mut Mapbd, (ctx, _, _, _, _, v): Inputsbd<'_>) -> Result {
         let ty = v.get_type();
         let ptr = ctx.builder.build_alloca(ty, "let").unwrap();
         ctx.builder.build_store(ptr, v).unwrap();
         ctx.lets.insert(self.0, LocalValue::Place(ty, ptr));
-        Ok(LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()))
+        Ok((
+            LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -863,7 +1052,7 @@ impl binding::Tuple {
     pub fn check(
         &self,
         mapbd: &mut Mapbd,
-        (ctx, cg, quir, maptd, mapty, v): Inputsbd<'_>
+        (ctx, cg, quir, maptd, mapty, v): Inputsbd<'_>,
     ) -> Result {
         let BasicValueEnum::StructValue(v) = v else {
             panic!()
@@ -878,7 +1067,10 @@ impl binding::Tuple {
             // anyway, this can never actually be anything other than true
             mapbd.query(b, (ctx, cg, quir, maptd, mapty, v))?;
         }
-        Ok(LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()))
+        Ok((
+            LocalValue::Value(ctx.lcx.custom_width_int_type(1).const_all_ones().into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }
 
@@ -886,7 +1078,7 @@ impl binding::Constructor {
     pub fn check(
         &self,
         mapbd: &mut Mapbd,
-        (ctx, cg, quir, maptd, mapty, v): Inputsbd<'_>
+        (ctx, cg, quir, maptd, mapty, v): Inputsbd<'_>,
     ) -> Result {
         let &id = self.id.get().unwrap();
         let tdid = quir.items.typecases[id].parent;
@@ -895,24 +1087,46 @@ impl binding::Constructor {
         let case = case[index];
 
         let v = v.into_struct_value();
-        let tag_v = ctx.builder.build_extract_value(v, 1, "type.tag").unwrap().into_int_value();
+        let tag_v = ctx
+            .builder
+            .build_extract_value(v, 1, "type.tag")
+            .unwrap()
+            .into_int_value();
         let tag_t = tag_v.get_type();
         let index_v = tag_t.const_int(index as u64, false);
         let check = ctx
             .builder
-            .build_int_compare(IntPredicate::EQ, tag_v, index_v, "type.tag==constructor.tag")
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag_v,
+                index_v,
+                "type.tag==constructor.tag",
+            )
             .unwrap();
-        let success_b = ctx.lcx.append_basic_block(ctx.val, "constructor_check_success");
+        let success_b = ctx
+            .lcx
+            .append_basic_block(ctx.val, "constructor_check_success");
         let &fail_b = ctx.ifs.last().unwrap();
-        ctx.builder.build_conditional_branch(check, success_b, fail_b).unwrap();
+        ctx.builder
+            .build_conditional_branch(check, success_b, fail_b)
+            .unwrap();
         ctx.builder.position_at_end(success_b);
 
         let tail = ctx.builder.build_extract_value(v, 0, "type.tail").unwrap();
-        let tail_ptr = ctx.builder.build_alloca(tail.get_type(), "alloca_type.tail").unwrap();
+        let tail_ptr = ctx
+            .builder
+            .build_alloca(tail.get_type(), "alloca_type.tail")
+            .unwrap();
         let tail_ty = case.get_field_type_at_index(0).unwrap();
         ctx.builder.build_store(tail_ptr, tail).unwrap();
-        let tail = ctx.builder.build_load(tail_ty, tail_ptr, "*(typecase*)type").unwrap();
-        let LocalValue::Value(fields) = mapbd.query(self.fields, (ctx, cg, quir, maptd, mapty, tail))? else {
+        let tail = ctx
+            .builder
+            .build_load(tail_ty, tail_ptr, "*(typecase*)type")
+            .unwrap();
+        let LocalValue::Value(fields) = mapbd
+            .query(self.fields, (ctx, cg, quir, maptd, mapty, tail))?
+            .0
+        else {
             panic!()
         };
         let fields = fields.into_int_value();
@@ -920,6 +1134,9 @@ impl binding::Constructor {
             .builder
             .build_and(check, fields, "constructor_check&&fields_check")
             .unwrap();
-        Ok(LocalValue::Value(out.into()))
+        Ok((
+            LocalValue::Value(out.into()),
+            ctx.builder.get_insert_block().unwrap(),
+        ))
     }
 }

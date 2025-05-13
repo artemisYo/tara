@@ -359,7 +359,7 @@ impl quir::binding::Constructor {
         binds: &Ivec<quir::binding::Id, quir::Binding>,
         _: quir::binding::Id,
     ) {
-        self.fields.resolve(files, ctx, quir, binds)
+        self.fields.register(files, ctx, quir, binds)
     }
 }
 

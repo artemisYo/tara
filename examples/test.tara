@@ -1,0 +1,24 @@
+
+type Foo {
+    case Bar(a: int, b: bool);
+    case Baz(a: string, b: int);
+}
+
+func _start() {
+    // let foo = Foo/Bar(69, true);
+    let foo = Foo/Baz("lol mao", 7);
+    if let Foo/Bar(a, b) = foo {
+        __builtin_syscall(
+            1, 1, 
+            __builtin_ptr_to_int("Foo/Bar"), 7,
+            0, 0, 0
+        );
+    } else if let Foo/Baz(s, l) = foo {
+        __builtin_syscall(
+            1, 1, 
+            __builtin_ptr_to_int(s), l,
+            0, 0, 0
+        );
+    };
+    __builtin_syscall(60, 0, 0, 0, 0, 0, 0);
+}
